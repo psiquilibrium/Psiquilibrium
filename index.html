@@ -9,23 +9,13 @@
 <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
 <style>
 :root{
-  --navy:#1B3A6B;
-  --navy-light:#2a5298;
-  --cyan:#4DC8E8;
-  --cyan-light:#e8f7fc;
-  --bg:#f0f7fa;
-  --white:#ffffff;
-  --text:#1B3A6B;
-  --text-muted:#5a7a9a;
-  --border:#c5dce8;
-  --danger:#c0392b;
-  --danger-bg:#fdf0ee;
-  --success:#0f6e56;
-  --success-bg:#eafaf3;
+  --navy:#1B3A6B;--navy-light:#2a5298;--cyan:#4DC8E8;--cyan-light:#e8f7fc;
+  --bg:#f0f7fa;--white:#ffffff;--text:#1B3A6B;--text-muted:#5a7a9a;
+  --border:#c5dce8;--danger:#c0392b;--danger-bg:#fdf0ee;--success:#0f6e56;--success-bg:#eafaf3;
 }
 *,*::before,*::after{box-sizing:border-box;margin:0;padding:0;}
 body{font-family:system-ui,sans-serif;font-size:15px;line-height:1.5;background:var(--bg);color:var(--text);min-height:100vh;}
-#root{max-width:960px;margin:0 auto;padding:1rem;}
+#root{max-width:1100px;margin:0 auto;padding:1rem;}
 input,select,textarea{font-family:inherit;font-size:14px;padding:8px 10px;border:1px solid var(--border);border-radius:8px;width:100%;background:var(--white);color:var(--text);outline:none;}
 input:focus,select:focus{border-color:var(--cyan);box-shadow:0 0 0 2px #4DC8E833;}
 button{font-family:inherit;font-size:13px;padding:7px 14px;border:1px solid var(--border);border-radius:8px;background:transparent;color:var(--navy);cursor:pointer;transition:background 0.15s;}
@@ -36,14 +26,25 @@ button:disabled{opacity:0.5;cursor:default;}
 <body>
 <div id="root"></div>
 <script type="text/babel">
-const{useState,useEffect,useCallback}=React;
+const{useState,useEffect,useCallback,useRef}=React;
 
 const SCRIPT_URL="https://script.google.com/macros/s/AKfycbwtbD8VGPkhFg0nMuRW2uvIjLnLlVXclYvqRlyqgYpz_kKNLxSX2FrYCdmwW8mQhudv/exec";
 const CONSULTORIOS=["Consultorio 1","Consultorio 2","Consultorio 3","Consultorio 4"];
 const DIAS=["Lun","Mar","Mié","Jue","Vie","Sáb"];
 const DIAS_FULL=["Lunes","Martes","Miércoles","Jueves","Viernes","Sábado"];
-const FRANJAS=Array.from({length:10},(_,i)=>`${String(8+i).padStart(2,"0")}:00 – ${String(9+i).padStart(2,"0")}:00`);
-const COLORS=["#1B3A6B","#2a7ab5","#0f6e56","#c0392b","#7B3FA0","#b07800","#2a5298","#c05000","#1a6b5a","#8B2252","#3a6b1B","#005a8b","#6b3a1B","#1B5a6b","#5a1B6b","#6b5a1B"];
+const COLORS=["#1B3A6B","#2a7ab5","#0f6e56","#9B3FA0","#b07800","#c05000","#1a6b5a","#8B2252","#3a6b1B","#005a8b","#6b3a1B","#1B5a6b","#5a1B6b","#6b5a1B","#2a5298","#4a7820"];
+const DURACIONES=[
+  {label:"1 hora",val:60},{label:"1 hora 30 min",val:90},{label:"2 horas",val:120},
+  {label:"2 horas 30 min",val:150},{label:"3 horas",val:180},{label:"3 horas 30 min",val:210},{label:"4 horas",val:240}
+];
+const SESSION_KEY="psiq_session";
+
+function getFranjas(diaSemana){
+  // diaSemana: 0=Lun...5=Sáb
+  const fin=diaSemana===5?12:18;
+  return Array.from({length:fin-8},(_,i)=>`${String(8+i).padStart(2,"0")}:00 – ${String(9+i).padStart(2,"0")}:00`);
+}
+const FRANJAS_SEMANA=Array.from({length:10},(_,i)=>`${String(8+i).padStart(2,"0")}:00 – ${String(9+i).padStart(2,"0")}:00`);
 
 function getWeekDates(base){
   const d=new Date(base);
@@ -67,17 +68,17 @@ function App(){
   const [token,setToken]=useState(null);
   const [reservas,setReservas]=useState([]);
   const [allUsers,setAllUsers]=useState([]);
-  const [userColors,setUserColors]=useState({});
   const [loading,setLoading]=useState(false);
   const [error,setError]=useState(null);
   const [toast,setToast]=useState(null);
   const [weekBase,setWeekBase]=useState(new Date());
   const [selCons,setSelCons]=useState(0);
-  const [view,setView]=useState("semana");
+  const [view,setView]=useState("todos");
   const [modal,setModal]=useState(null);
   const [form,setForm]=useState({nota:"",duracion:"60",profesionalId:""});
   const [conflict,setConflict]=useState(false);
   const [loginForm,setLoginForm]=useState({userId:"",password:""});
+  const pollRef=useRef(null);
 
   const weekDates=getWeekDates(weekBase);
   const isAdmin=currentUser?.rol==="admin";
@@ -85,35 +86,58 @@ function App(){
 
   const showToast=(msg,type="success")=>{setToast({msg,type});setTimeout(()=>setToast(null),3000);};
 
+  // Persistir sesión
   useEffect(()=>{
-    const c={};
-    allUsers.forEach((u,i)=>{c[u.id]=COLORS[i%COLORS.length];});
-    setUserColors(c);
-  },[allUsers.length]);
+    const saved=sessionStorage.getItem(SESSION_KEY);
+    if(saved){
+      try{
+        const {user,tok,users}=JSON.parse(saved);
+        setCurrentUser(user);setToken(tok);setAllUsers(users||[]);setScreen("app");
+      }catch{}
+    }
+  },[]);
 
+  const saveSession=(user,tok,users)=>{
+    sessionStorage.setItem(SESSION_KEY,JSON.stringify({user,tok,users}));
+  };
+
+  const clearSession=()=>{
+    sessionStorage.removeItem(SESSION_KEY);
+  };
+
+  // Polling cada 30 segundos para tiempo real
   const fetchReservas=useCallback(async(tkn)=>{
-    setLoading(true);
     try{
       const data=await api({action:"getReservas",token:tkn||token});
       if(data.ok) setReservas(data.reservas.map(r=>({...r,franja:Number(r.franja),duracion:Number(r.duracion),consultorio:Number(r.consultorio)})));
-      else setError(data.error);
-    }catch{setError("Error al cargar reservas.");}
-    setLoading(false);
+    }catch{}
   },[token]);
+
+  useEffect(()=>{
+    if(screen==="app"&&token){
+      fetchReservas(token);
+      pollRef.current=setInterval(()=>fetchReservas(token),30000);
+    }
+    return()=>{if(pollRef.current) clearInterval(pollRef.current);};
+  },[screen,token]);
 
   const handleLogin=async()=>{
     setError(null);setLoading(true);
     try{
       const data=await api({action:"login",userId:loginForm.userId,password:loginForm.password});
       if(data.ok){
-        setCurrentUser(data.user);
-        setToken(data.token);
-        setAllUsers(data.users||[]);
+        setCurrentUser(data.user);setToken(data.token);setAllUsers(data.users||[]);
+        saveSession(data.user,data.token,data.users||[]);
         setScreen("app");
         fetchReservas(data.token);
       } else setError(data.error||"Credenciales incorrectas");
     }catch{setError("No se pudo conectar.");}
     setLoading(false);
+  };
+
+  const getUserColor=(userId)=>{
+    const idx=allUsers.findIndex(u=>u.id===userId);
+    return COLORS[idx>=0?idx%COLORS.length:0];
   };
 
   const hasConflict=(consultorio,fecha,franja,duracion,excludeId=null)=>{
@@ -134,20 +158,10 @@ function App(){
   const handleSave=async()=>{
     const dur=parseInt(form.duracion);
     if(hasConflict(modal.consultorio,modal.fecha,modal.franja,dur)){setConflict(true);return;}
-    // Si es admin y seleccionó un profesional, usar ese; si no, usar el usuario logueado
     const targetUserId=(isAdmin&&form.profesionalId)?form.profesionalId:currentUser.id;
     setLoading(true);
     try{
-      const data=await api({
-        action:"crearReserva",
-        token,
-        consultorio:modal.consultorio,
-        fecha:modal.fecha,
-        franja:modal.franja,
-        duracion:dur,
-        nota:form.nota,
-        targetUserId
-      });
+      const data=await api({action:"crearReserva",token,consultorio:modal.consultorio,fecha:modal.fecha,franja:modal.franja,duracion:dur,nota:form.nota,targetUserId});
       if(data.ok){await fetchReservas(token);setModal(null);showToast("Reserva creada");}
       else setError(data.error);
     }catch{setError("Error al guardar.");}
@@ -185,8 +199,7 @@ function App(){
     } else {
       if(isSocio&&!isAdmin) return;
       setModal({mode:"nueva",consultorio,fecha,franja});
-      setForm({nota:"",duracion:"60",profesionalId:""});
-      setConflict(false);
+      setForm({nota:"",duracion:"60",profesionalId:""});setConflict(false);
     }
   };
 
@@ -196,11 +209,11 @@ function App(){
     muted:{fontSize:12,color:"var(--text-muted)"},
   };
 
-  // LOGIN
+  // ── LOGIN ──────────────────────────────────────────────────
   if(screen==="login") return(
     <div style={{maxWidth:360,margin:"3rem auto",...s.card}}>
       <div style={{display:"flex",alignItems:"center",gap:10,marginBottom:20}}>
-        <div style={{width:36,height:36,border:"2.5px solid var(--cyan)",borderRadius:8,transform:"rotate(45deg)"}}></div>
+        <div style={{width:36,height:36,border:"2.5px solid var(--cyan)",borderRadius:8,transform:"rotate(45deg)",flexShrink:0}}></div>
         <div>
           <div style={{fontWeight:700,fontSize:20,color:"var(--navy)"}}>Psiquilibrium</div>
           <div style={{fontSize:11,color:"var(--cyan)"}}>Centro de Bienestar Integral</div>
@@ -215,15 +228,77 @@ function App(){
     </div>
   );
 
-  // APP
+  // ── APP ────────────────────────────────────────────────────
   const misReservas=reservas.filter(r=>r.userId===currentUser?.id).sort((a,b)=>a.fecha.localeCompare(b.fecha)||a.franja-b.franja);
   const todasReservas=[...reservas].sort((a,b)=>a.fecha.localeCompare(b.fecha)||a.franja-b.franja);
   const profesionales=allUsers.filter(u=>u.rol==="profesional");
 
+  // Tabla de calendario reutilizable
+  const CalTable=({consultorioIdx,compact=false})=>{
+    const franjaCount=10; // máx filas (lun-vie: 10, sáb: 4 — se ocultan las extras)
+    return(
+      <table style={{width:"100%",borderCollapse:"collapse",tableLayout:"fixed",fontSize:compact?11:12}}>
+        <thead>
+          <tr>
+            <th style={{width:compact?52:70,padding:"5px 4px",color:"var(--text-muted)",fontWeight:400,textAlign:"left",borderBottom:"1px solid var(--border)"}}>Hora</th>
+            {weekDates.map((d,i)=>{
+              const isToday=dateKey(d)===dateKey(new Date());
+              return(
+                <th key={i} style={{padding:"5px 2px",fontWeight:isToday?600:400,color:isToday?"var(--white)":"var(--text-muted)",textAlign:"center",borderBottom:"1px solid var(--border)",background:isToday?"var(--navy)":"transparent",fontSize:compact?10:12}}>
+                  {DIAS[i]}{compact?"":""}<br/><span style={{fontSize:compact?9:11}}>{fmt(d)}</span>
+                </th>
+              );
+            })}
+          </tr>
+        </thead>
+        <tbody>
+          {FRANJAS_SEMANA.map((franja,fi)=>(
+            <tr key={fi}>
+              <td style={{padding:"2px 4px",color:"var(--text-muted)",fontSize:compact?9:11,borderBottom:"1px solid var(--border)",whiteSpace:"nowrap"}}>{franja.split(" – ")[0]}</td>
+              {weekDates.map((d,di)=>{
+                const fecha=dateKey(d);
+                const isSat=di===5;
+                // Sábado solo hasta las 12 (franjas 0-3)
+                if(isSat&&fi>=4) return <td key={di} style={{background:"#f5f5f5",borderBottom:"1px solid var(--border)"}}></td>;
+                const r=getReserva(consultorioIdx,fecha,fi);
+                const isStart=r&&r.franja===fi;
+                const color=r?getUserColor(r.userId):null;
+                const usuario=r?allUsers.find(u=>u.id===r.userId):null;
+                return(
+                  <td key={di} onClick={()=>openModal(consultorioIdx,fecha,fi)}
+                    style={{padding:"2px 2px",height:compact?24:30,borderBottom:"1px solid var(--border)",
+                      cursor:isSocio&&!isAdmin&&!r?"default":"pointer",
+                      background:r?color+"18":"transparent",
+                      borderLeft:r?`3px solid ${color}`:"3px solid transparent",
+                      verticalAlign:"middle"}}>
+                    {isStart&&(
+                      <div style={{fontSize:compact?8:10,color:"var(--navy)",fontWeight:600,overflow:"hidden",whiteSpace:"nowrap",textOverflow:"ellipsis"}}>
+                        {usuario?.nombre.split(" ").slice(-1)[0]||r.userId}
+                        {r.nota&&!compact?` · ${r.nota.slice(0,12)}`:""}
+                      </div>
+                    )}
+                  </td>
+                );
+              })}
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    );
+  };
+
   return(
     <div style={{paddingBottom:"2rem"}}>
-      {toast&&<div style={{position:"fixed",top:16,right:16,zIndex:999,padding:"10px 18px",borderRadius:8,background:toast.type==="danger"?"var(--danger-bg)":"var(--success-bg)",color:toast.type==="danger"?"var(--danger)":"var(--success)",fontSize:13,border:`1px solid ${toast.type==="danger"?"#f5c6c0":"#9fe1cb"}`}}>{toast.msg}</div>}
+      {toast&&(
+        <div style={{position:"fixed",top:16,right:16,zIndex:999,padding:"10px 18px",borderRadius:8,
+          background:toast.type==="danger"?"var(--danger-bg)":"var(--success-bg)",
+          color:toast.type==="danger"?"var(--danger)":"var(--success)",
+          fontSize:13,border:`1px solid ${toast.type==="danger"?"#f5c6c0":"#9fe1cb"}`}}>
+          {toast.msg}
+        </div>
+      )}
 
+      {/* HEADER */}
       <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:16,flexWrap:"wrap",gap:8,paddingTop:"0.5rem"}}>
         <div style={{display:"flex",alignItems:"center",gap:10}}>
           <div style={{width:24,height:24,border:"2px solid var(--cyan)",borderRadius:5,transform:"rotate(45deg)",flexShrink:0}}></div>
@@ -231,104 +306,84 @@ function App(){
           <span style={{fontSize:12,background:"var(--cyan-light)",padding:"2px 8px",borderRadius:6,color:"var(--navy)"}}>{currentUser.nombre} · {currentUser.rol}</span>
         </div>
         <div style={{display:"flex",gap:6,flexWrap:"wrap"}}>
-          {["semana","todos","mis reservas",...(isSocio?["todas"]:[])].map(v=>(
-            <button key={v} onClick={()=>setView(v)} style={{fontSize:12,background:view===v?"var(--navy)":"transparent",color:view===v?"#fff":"var(--navy)",border:`1px solid ${view===v?"var(--navy)":"var(--border)"}`}}>{v.charAt(0).toUpperCase()+v.slice(1)}</button>
+          {["todos","semana","mis reservas",...(isSocio?["todas"]:[])].map(v=>(
+            <button key={v} onClick={()=>setView(v)} style={{fontSize:12,background:view===v?"var(--navy)":"transparent",color:view===v?"#fff":"var(--navy)",border:`1px solid ${view===v?"var(--navy)":"var(--border)"}`}}>
+              {v.charAt(0).toUpperCase()+v.slice(1)}
+            </button>
           ))}
           <button onClick={()=>fetchReservas(token)} style={{fontSize:12,color:"var(--text-muted)"}} title="Actualizar">↺</button>
-          <button onClick={()=>{setScreen("login");setCurrentUser(null);setToken(null);}} style={{fontSize:12,color:"var(--text-muted)"}}>Salir</button>
+          <button onClick={()=>{clearSession();setScreen("login");setCurrentUser(null);setToken(null);}} style={{fontSize:12,color:"var(--text-muted)"}}>Salir</button>
         </div>
       </div>
 
-      {loading&&<div style={{...s.muted,marginBottom:8}}>Cargando…</div>}
       {error&&<div style={{fontSize:12,color:"var(--danger)",marginBottom:8,padding:"8px 12px",background:"var(--danger-bg)",borderRadius:8}}>{error}<button onClick={()=>setError(null)} style={{fontSize:11,marginLeft:8}}>✕</button></div>}
 
-      {view==="semana"&&(<>
+      {/* NAVEGACIÓN SEMANA — compartida entre "todos" y "semana" */}
+      {(view==="todos"||view==="semana")&&(
         <div style={{display:"flex",alignItems:"center",gap:8,marginBottom:12,flexWrap:"wrap"}}>
           <button onClick={()=>{const d=new Date(weekBase);d.setDate(d.getDate()-7);setWeekBase(d);}}>← Anterior</button>
           <span style={s.muted}>{fmt(weekDates[0])} – {fmt(weekDates[5])}</span>
           <button onClick={()=>{const d=new Date(weekBase);d.setDate(d.getDate()+7);setWeekBase(d);}}>Siguiente →</button>
           <button onClick={()=>setWeekBase(new Date())} style={{fontSize:12,color:"var(--text-muted)"}}>Hoy</button>
         </div>
-        <div style={{display:"flex",gap:6,marginBottom:10,flexWrap:"wrap"}}>
-          {CONSULTORIOS.map((c,i)=>(
-            <button key={i} onClick={()=>setSelCons(i)} style={{fontSize:12,background:selCons===i?"var(--navy)":"transparent",color:selCons===i?"#fff":"var(--navy)",border:`1px solid ${selCons===i?"var(--navy)":"var(--border)"}`}}>{c}</button>
-          ))}
-        </div>
+      )}
+
+      {/* VISTA: TODOS LOS CONSULTORIOS EN PARALELO */}
+      {view==="todos"&&(
         <div style={{overflowX:"auto"}}>
-          <table style={{width:"100%",borderCollapse:"collapse",tableLayout:"fixed",fontSize:12}}>
+          {/* Cabecera de días compartida */}
+          <table style={{width:"100%",borderCollapse:"collapse",tableLayout:"fixed",fontSize:12,marginBottom:2}}>
             <thead>
               <tr>
-                <th style={{width:70,padding:"6px 4px",color:"var(--text-muted)",fontWeight:400,textAlign:"left",borderBottom:"1px solid var(--border)"}}>Hora</th>
+                <th style={{width:52,borderBottom:"2px solid var(--border)"}}></th>
                 {weekDates.map((d,i)=>{
                   const isToday=dateKey(d)===dateKey(new Date());
-                  return <th key={i} style={{padding:"6px 4px",fontWeight:isToday?600:400,color:isToday?"var(--white)":"var(--text-muted)",textAlign:"center",borderBottom:"1px solid var(--border)",background:isToday?"var(--navy)":"transparent"}}>{DIAS[i]}<br/><span style={{fontSize:11}}>{fmt(d)}</span></th>;
+                  return(
+                    <th key={i} style={{padding:"6px 2px",fontWeight:isToday?700:500,color:isToday?"var(--white)":"var(--navy)",textAlign:"center",borderBottom:"2px solid var(--border)",background:isToday?"var(--navy)":"var(--cyan-light)",fontSize:12}}>
+                      {DIAS[i]}<br/><span style={{fontSize:10,fontWeight:400}}>{fmt(d)}</span>
+                    </th>
+                  );
                 })}
               </tr>
             </thead>
-            <tbody>
-              {FRANJAS.map((franja,fi)=>(
-                <tr key={fi}>
-                  <td style={{padding:"3px 4px",color:"var(--text-muted)",fontSize:11,borderBottom:"1px solid var(--border)",whiteSpace:"nowrap"}}>{franja.split(" – ")[0]}</td>
-                  {weekDates.map((d,di)=>{
-                    const fecha=dateKey(d);
-                    const r=getReserva(selCons,fecha,fi);
-                    const isStart=r&&r.franja===fi;
-                    const color=r?COLORS[(allUsers.findIndex(u=>u.id===r.userId))%COLORS.length]||"var(--navy)":null;
-                    const usuario=r?allUsers.find(u=>u.id===r.userId):null;
-                    return(
-                      <td key={di} onClick={()=>openModal(selCons,fecha,fi)} style={{padding:"2px 3px",height:32,borderBottom:"1px solid var(--border)",cursor:isSocio&&!isAdmin&&!r?"default":"pointer",background:r?color+"18":"transparent",borderLeft:r?`3px solid ${color}`:"3px solid transparent",verticalAlign:"middle"}}>
-                        {isStart&&<div style={{fontSize:10,color:"var(--navy)",fontWeight:600,overflow:"hidden",whiteSpace:"nowrap",textOverflow:"ellipsis"}}>{usuario?.nombre.split(" ").slice(-1)[0]||r.userId}{r.nota?` · ${r.nota.slice(0,14)}`:""}</div>}
-                      </td>
-                    );
-                  })}
-                </tr>
-              ))}
-            </tbody>
           </table>
-        </div>
-        <div style={{marginTop:12,display:"flex",gap:12,flexWrap:"wrap"}}>
-          {allUsers.map((u,i)=>(
-            <div key={u.id} style={{display:"flex",alignItems:"center",gap:5,fontSize:11,color:"var(--text-muted)"}}>
-              <span style={{width:10,height:10,borderRadius:2,background:COLORS[i%COLORS.length],display:"inline-block"}}></span>{u.nombre}
-            </div>
-          ))}
-        </div>
-      </>)}
-
-      {view==="todos"&&(<>
-        <div style={{display:"flex",alignItems:"center",gap:8,marginBottom:12,flexWrap:"wrap"}}>
-          <button onClick={()=>{const d=new Date(weekBase);d.setDate(d.getDate()-7);setWeekBase(d);}}>← Anterior</button>
-          <span style={s.muted}>{fmt(weekDates[0])} – {fmt(weekDates[5])}</span>
-          <button onClick={()=>{const d=new Date(weekBase);d.setDate(d.getDate()+7);setWeekBase(d);}}>Siguiente →</button>
-          <button onClick={()=>setWeekBase(new Date())} style={{fontSize:12,color:"var(--text-muted)"}}>Hoy</button>
-        </div>
-        <div style={{overflowX:"auto"}}>
+          {/* Un bloque por consultorio */}
           {CONSULTORIOS.map((consNombre,ci)=>(
-            <div key={ci} style={{marginBottom:20}}>
-              <div style={{fontWeight:600,fontSize:13,color:"var(--navy)",marginBottom:6,padding:"4px 8px",background:"var(--cyan-light)",borderRadius:6,display:"inline-block"}}>{consNombre}</div>
-              <table style={{width:"100%",borderCollapse:"collapse",tableLayout:"fixed",fontSize:12}}>
-                <thead>
-                  <tr>
-                    <th style={{width:70,padding:"5px 4px",color:"var(--text-muted)",fontWeight:400,textAlign:"left",borderBottom:"1px solid var(--border)"}}>Hora</th>
-                    {weekDates.map((d,i)=>{
-                      const isToday=dateKey(d)===dateKey(new Date());
-                      return <th key={i} style={{padding:"5px 4px",fontWeight:isToday?600:400,color:isToday?"var(--white)":"var(--text-muted)",textAlign:"center",borderBottom:"1px solid var(--border)",background:isToday?"var(--navy)":"transparent"}}>{DIAS[i]}<br/><span style={{fontSize:10}}>{fmt(d)}</span></th>;
-                    })}
-                  </tr>
-                </thead>
+            <div key={ci} style={{marginBottom:4}}>
+              <table style={{width:"100%",borderCollapse:"collapse",tableLayout:"fixed",fontSize:11}}>
                 <tbody>
-                  {FRANJAS.map((franja,fi)=>(
+                  {FRANJAS_SEMANA.map((franja,fi)=>(
                     <tr key={fi}>
-                      <td style={{padding:"2px 4px",color:"var(--text-muted)",fontSize:10,borderBottom:"1px solid var(--border)",whiteSpace:"nowrap"}}>{franja.split(" – ")[0]}</td>
+                      {fi===0?(
+                        <td rowSpan={FRANJAS_SEMANA.length} style={{width:52,verticalAlign:"middle",textAlign:"center",background:"var(--cyan-light)",borderRight:"1px solid var(--border)",fontSize:9,fontWeight:700,color:"var(--navy)",padding:"2px",writingMode:"vertical-rl",transform:"rotate(180deg)",letterSpacing:1}}>
+                          {consNombre}
+                        </td>
+                      ):null}
                       {weekDates.map((d,di)=>{
                         const fecha=dateKey(d);
+                        const isSat=di===5;
+                        if(isSat&&fi>=4) return fi===0?<td key={di} rowSpan={6} style={{background:"#eef3f6",borderLeft:"1px solid var(--border)",borderBottom:"1px solid var(--border)"}}></td>:null;
                         const r=getReserva(ci,fecha,fi);
                         const isStart=r&&r.franja===fi;
-                        const color=r?COLORS[(allUsers.findIndex(u=>u.id===r.userId))%COLORS.length]||"var(--navy)":null;
+                        const color=r?getUserColor(r.userId):null;
                         const usuario=r?allUsers.find(u=>u.id===r.userId):null;
                         return(
-                          <td key={di} onClick={()=>openModal(ci,fecha,fi)} style={{padding:"2px 3px",height:26,borderBottom:"1px solid var(--border)",cursor:isSocio&&!isAdmin&&!r?"default":"pointer",background:r?color+"18":"transparent",borderLeft:r?`3px solid ${color}`:"3px solid transparent",verticalAlign:"middle"}}>
-                            {isStart&&<div style={{fontSize:9,color:"var(--navy)",fontWeight:600,overflow:"hidden",whiteSpace:"nowrap",textOverflow:"ellipsis"}}>{usuario?.nombre.split(" ").slice(-1)[0]||r.userId}{r.nota?` · ${r.nota.slice(0,12)}`:""}</div>}
+                          <td key={di} onClick={()=>openModal(ci,fecha,fi)}
+                            style={{padding:"1px 2px",height:22,
+                              borderBottom:`1px solid ${fi===FRANJAS_SEMANA.length-1?"var(--navy)":"var(--border)"}`,
+                              borderLeft:"1px solid var(--border)",
+                              cursor:isSocio&&!isAdmin&&!r?"default":"pointer",
+                              background:r?color+"20":"transparent",
+                              borderTop:isStart&&r?`2px solid ${color}`:"none",
+                              verticalAlign:"middle"}}>
+                            {isStart&&(
+                              <div style={{fontSize:8,color:"var(--navy)",fontWeight:700,overflow:"hidden",whiteSpace:"nowrap",textOverflow:"ellipsis",paddingLeft:2}}>
+                                {usuario?.nombre.split(" ").slice(-1)[0]||r.userId}
+                              </div>
+                            )}
+                            {fi===0&&!r&&(
+                              <div style={{fontSize:8,color:"var(--text-muted)",paddingLeft:2}}>{franja.split(" – ")[0]}</div>
+                            )}
                           </td>
                         );
                       })}
@@ -338,24 +393,47 @@ function App(){
               </table>
             </div>
           ))}
+          {/* Leyenda */}
+          <div style={{marginTop:12,display:"flex",gap:12,flexWrap:"wrap"}}>
+            {allUsers.map((u,i)=>(
+              <div key={u.id} style={{display:"flex",alignItems:"center",gap:5,fontSize:11,color:"var(--text-muted)"}}>
+                <span style={{width:10,height:10,borderRadius:2,background:COLORS[i%COLORS.length],display:"inline-block"}}></span>{u.nombre}
+              </div>
+            ))}
+          </div>
         </div>
-        <div style={{marginTop:8,display:"flex",gap:12,flexWrap:"wrap"}}>
-          {allUsers.map((u,i)=>(
-            <div key={u.id} style={{display:"flex",alignItems:"center",gap:5,fontSize:11,color:"var(--text-muted)"}}>
-              <span style={{width:10,height:10,borderRadius:2,background:COLORS[i%COLORS.length],display:"inline-block"}}></span>{u.nombre}
-            </div>
-          ))}
-        </div>
-      </>)}
+      )}
 
+      {/* VISTA: SEMANA — UN CONSULTORIO */}
+      {view==="semana"&&(
+        <>
+          <div style={{display:"flex",gap:6,marginBottom:10,flexWrap:"wrap"}}>
+            {CONSULTORIOS.map((c,i)=>(
+              <button key={i} onClick={()=>setSelCons(i)} style={{fontSize:12,background:selCons===i?"var(--navy)":"transparent",color:selCons===i?"#fff":"var(--navy)",border:`1px solid ${selCons===i?"var(--navy)":"var(--border)"}`}}>{c}</button>
+            ))}
+          </div>
+          <div style={{overflowX:"auto"}}>
+            <CalTable consultorioIdx={selCons}/>
+          </div>
+          <div style={{marginTop:12,display:"flex",gap:12,flexWrap:"wrap"}}>
+            {allUsers.map((u,i)=>(
+              <div key={u.id} style={{display:"flex",alignItems:"center",gap:5,fontSize:11,color:"var(--text-muted)"}}>
+                <span style={{width:10,height:10,borderRadius:2,background:COLORS[i%COLORS.length],display:"inline-block"}}></span>{u.nombre}
+              </div>
+            ))}
+          </div>
+        </>
+      )}
 
+      {/* VISTA: MIS RESERVAS */}
+      {view==="mis reservas"&&(
         <div>
-          <div style={{fontWeight:500,marginBottom:12,fontSize:14}}>Mis reservas</div>
+          <div style={{fontWeight:600,marginBottom:12,fontSize:14,color:"var(--navy)"}}>Mis reservas</div>
           {misReservas.length===0&&<p style={s.muted}>No tienes reservas registradas.</p>}
           {misReservas.map(r=>(
-            <div key={r.id} style={{...s.card,marginBottom:8,display:"flex",justifyContent:"space-between",alignItems:"center"}}>
+            <div key={r.id} style={{...s.card,marginBottom:8,display:"flex",justifyContent:"space-between",alignItems:"center",borderLeft:`3px solid ${getUserColor(r.userId)}`}}>
               <div>
-                <div style={{fontWeight:500,fontSize:13}}>{CONSULTORIOS[r.consultorio]} · {FRANJAS[r.franja]?.split(" – ")[0]}</div>
+                <div style={{fontWeight:600,fontSize:13,color:"var(--navy)"}}>{CONSULTORIOS[r.consultorio]} · {FRANJAS_SEMANA[r.franja]?.split(" – ")[0]}</div>
                 <div style={s.muted}>{r.fecha} · {r.duracion} min{r.nota?` · ${r.nota}`:""}</div>
               </div>
               <button onClick={()=>handleDelete(r.id)} style={{fontSize:11,color:"var(--danger)",background:"var(--danger-bg)",border:"1px solid #f5c6c0",flexShrink:0}}>Cancelar</button>
@@ -364,16 +442,17 @@ function App(){
         </div>
       )}
 
+      {/* VISTA: TODAS — solo admin/socio */}
       {view==="todas"&&isSocio&&(
         <div>
-          <div style={{fontWeight:500,marginBottom:12,fontSize:14}}>Todas las reservas ({todasReservas.length})</div>
+          <div style={{fontWeight:600,marginBottom:12,fontSize:14,color:"var(--navy)"}}>Todas las reservas ({todasReservas.length})</div>
           {todasReservas.map(r=>{
             const u=allUsers.find(x=>x.id===r.userId);
-            const color=userColors[r.userId]||"#888";
+            const color=getUserColor(r.userId);
             return(
               <div key={r.id} style={{...s.card,borderLeft:`3px solid ${color}`,marginBottom:8,display:"flex",justifyContent:"space-between",alignItems:"center"}}>
                 <div>
-                  <div style={{fontWeight:500,fontSize:13}}>{CONSULTORIOS[r.consultorio]} · {FRANJAS[r.franja]?.split(" – ")[0]}</div>
+                  <div style={{fontWeight:600,fontSize:13,color:"var(--navy)"}}>{CONSULTORIOS[r.consultorio]} · {FRANJAS_SEMANA[r.franja]?.split(" – ")[0]}</div>
                   <div style={s.muted}>{r.fecha} · {u?.nombre||r.userId} · {r.duracion} min{r.nota?` · ${r.nota}`:""}</div>
                 </div>
                 {isAdmin&&<button onClick={()=>handleDelete(r.id)} style={{fontSize:11,color:"var(--danger)",background:"var(--danger-bg)",border:"1px solid #f5c6c0",flexShrink:0}}>Cancelar</button>}
@@ -383,57 +462,64 @@ function App(){
         </div>
       )}
 
+      {/* MODAL */}
       {modal&&(
         <div style={{position:"fixed",inset:0,background:"rgba(0,0,0,0.35)",display:"flex",alignItems:"center",justifyContent:"center",zIndex:100,padding:16}}>
-          <div style={{...s.card,width:"100%",maxWidth:380}}>
-            {modal.mode==="nueva"&&(<>
-              <div style={{fontWeight:500,fontSize:15,marginBottom:4}}>Nueva reserva</div>
-              <div style={{...s.muted,marginBottom:16}}>{CONSULTORIOS[modal.consultorio]} · {DIAS_FULL[weekDates.findIndex(d=>dateKey(d)===modal.fecha)]||""} {modal.fecha} · {FRANJAS[modal.franja]}</div>
-              {isAdmin&&(<>
-                <label style={s.label}>Profesional</label>
-                <select value={form.profesionalId} onChange={e=>setForm(f=>({...f,profesionalId:e.target.value}))} style={{marginBottom:12}}>
-                  <option value="">— Seleccionar profesional —</option>
-                  {profesionales.map(u=><option key={u.id} value={u.id}>{u.nombre}</option>)}
+          <div style={{...s.card,width:"100%",maxWidth:400}}>
+            {modal.mode==="nueva"&&(
+              <>
+                <div style={{fontWeight:600,fontSize:15,marginBottom:4,color:"var(--navy)"}}>Nueva reserva</div>
+                <div style={{...s.muted,marginBottom:16}}>{CONSULTORIOS[modal.consultorio]} · {DIAS_FULL[weekDates.findIndex(d=>dateKey(d)===modal.fecha)]||""} {modal.fecha} · {FRANJAS_SEMANA[modal.franja]}</div>
+                {isAdmin&&(
+                  <>
+                    <label style={s.label}>Profesional</label>
+                    <select value={form.profesionalId} onChange={e=>setForm(f=>({...f,profesionalId:e.target.value}))} style={{marginBottom:12}}>
+                      <option value="">— Seleccionar profesional —</option>
+                      {profesionales.map(u=><option key={u.id} value={u.id}>{u.nombre}</option>)}
+                    </select>
+                  </>
+                )}
+                <label style={s.label}>Duración</label>
+                <select value={form.duracion} onChange={e=>{setForm(f=>({...f,duracion:e.target.value}));setConflict(false);}} style={{marginBottom:12}}>
+                  {DURACIONES.map(d=><option key={d.val} value={d.val}>{d.label}</option>)}
                 </select>
-              </>)}
-              <label style={s.label}>Duración</label>
-              <select value={form.duracion} onChange={e=>{setForm(f=>({...f,duracion:e.target.value}));setConflict(false);}} style={{marginBottom:12}}>
-                <option value="60">60 min (1 hora)</option>
-                <option value="120">120 min (2 horas)</option>
-                <option value="180">180 min (3 horas)</option>
-              </select>
-              <label style={s.label}>Nota libre (opcional)</label>
-              <input value={form.nota} onChange={e=>setForm(f=>({...f,nota:e.target.value}))} placeholder="Ej: nombre paciente, tipo de consulta..." style={{marginBottom:16}}/>
-              {conflict&&<div style={{fontSize:12,color:"#c0392b",marginBottom:8}}>Conflicto con otra reserva en ese horario.</div>}
-              <div style={{display:"flex",gap:8,justifyContent:"flex-end"}}>
-                <button onClick={()=>setModal(null)} style={{color:"var(--text-muted)"}}>Cancelar</button>
-                <button onClick={handleSave} disabled={loading||(isAdmin&&!form.profesionalId)} style={{background:"var(--navy)",color:"#fff",border:"none"}}>Reservar</button>
-              </div>
-            </>)}
-            {modal.mode==="view"&&(<>
-              <div style={{fontWeight:500,fontSize:15,marginBottom:4}}>Reserva</div>
-              <div style={{...s.muted,marginBottom:12}}>{CONSULTORIOS[modal.reserva.consultorio]} · {modal.reserva.fecha} · {FRANJAS[modal.reserva.franja]}</div>
-              <div style={{fontSize:13,marginBottom:8}}><span style={{color:"#888"}}>Profesional: </span>{allUsers.find(u=>u.id===modal.reserva.userId)?.nombre||modal.reserva.userId}</div>
-              {modal.canEdit?(<>
-                <label style={{...s.label,marginTop:8}}>Duración</label>
-                <select value={form.duracion} onChange={e=>{setForm(f=>({...f,duracion:e.target.value}));setConflict(false);}} style={{marginBottom:10}}>
-                  <option value="60">60 min</option>
-                  <option value="120">120 min</option>
-                  <option value="180">180 min</option>
-                </select>
-                <label style={s.label}>Nota</label>
-                <input value={form.nota} onChange={e=>setForm(f=>({...f,nota:e.target.value}))} style={{marginBottom:12}}/>
-                {conflict&&<div style={{fontSize:12,color:"#c0392b",marginBottom:8}}>Conflicto de horario.</div>}
+                <label style={s.label}>Nota libre (opcional)</label>
+                <input value={form.nota} onChange={e=>setForm(f=>({...f,nota:e.target.value}))} placeholder="Ej: nombre paciente, tipo de consulta..." style={{marginBottom:16}}/>
+                {conflict&&<div style={{fontSize:12,color:"var(--danger)",marginBottom:8}}>Conflicto con otra reserva en ese horario.</div>}
                 <div style={{display:"flex",gap:8,justifyContent:"flex-end"}}>
-                  <button onClick={()=>handleDelete(modal.reserva.id)} style={{color:"var(--danger)",background:"var(--danger-bg)",border:"1px solid #f5c6c0"}}>Cancelar reserva</button>
-                  <button onClick={()=>setModal(null)} style={{color:"var(--text-muted)"}}>Cerrar</button>
-                  <button onClick={handleUpdate} disabled={loading} style={{background:"var(--navy)",color:"#fff",border:"none"}}>Guardar</button>
+                  <button onClick={()=>setModal(null)} style={{color:"var(--text-muted)"}}>Cancelar</button>
+                  <button onClick={handleSave} disabled={loading||(isAdmin&&!form.profesionalId)} style={{background:"var(--navy)",color:"#fff",border:"none"}}>Reservar</button>
                 </div>
-              </>):(<>
-                <div style={{fontSize:13,marginBottom:12}}><span style={{color:"#888"}}>Nota: </span>{modal.reserva.nota||"—"}</div>
-                <div style={{display:"flex",justifyContent:"flex-end"}}><button onClick={()=>setModal(null)}>Cerrar</button></div>
-              </>)}
-            </>)}
+              </>
+            )}
+            {modal.mode==="view"&&(
+              <>
+                <div style={{fontWeight:600,fontSize:15,marginBottom:4,color:"var(--navy)"}}>Reserva</div>
+                <div style={{...s.muted,marginBottom:12}}>{CONSULTORIOS[modal.reserva.consultorio]} · {modal.reserva.fecha} · {FRANJAS_SEMANA[modal.reserva.franja]}</div>
+                <div style={{fontSize:13,marginBottom:8}}><span style={{color:"var(--text-muted)"}}>Profesional: </span>{allUsers.find(u=>u.id===modal.reserva.userId)?.nombre||modal.reserva.userId}</div>
+                {modal.canEdit?(
+                  <>
+                    <label style={{...s.label,marginTop:8}}>Duración</label>
+                    <select value={form.duracion} onChange={e=>{setForm(f=>({...f,duracion:e.target.value}));setConflict(false);}} style={{marginBottom:10}}>
+                      {DURACIONES.map(d=><option key={d.val} value={d.val}>{d.label}</option>)}
+                    </select>
+                    <label style={s.label}>Nota</label>
+                    <input value={form.nota} onChange={e=>setForm(f=>({...f,nota:e.target.value}))} style={{marginBottom:12}}/>
+                    {conflict&&<div style={{fontSize:12,color:"var(--danger)",marginBottom:8}}>Conflicto de horario.</div>}
+                    <div style={{display:"flex",gap:8,justifyContent:"flex-end"}}>
+                      <button onClick={()=>handleDelete(modal.reserva.id)} style={{color:"var(--danger)",background:"var(--danger-bg)",border:"1px solid #f5c6c0"}}>Cancelar reserva</button>
+                      <button onClick={()=>setModal(null)} style={{color:"var(--text-muted)"}}>Cerrar</button>
+                      <button onClick={handleUpdate} disabled={loading} style={{background:"var(--navy)",color:"#fff",border:"none"}}>Guardar</button>
+                    </div>
+                  </>
+                ):(
+                  <>
+                    <div style={{fontSize:13,marginBottom:12}}><span style={{color:"var(--text-muted)"}}>Nota: </span>{modal.reserva.nota||"—"}</div>
+                    <div style={{display:"flex",justifyContent:"flex-end"}}><button onClick={()=>setModal(null)}>Cerrar</button></div>
+                  </>
+                )}
+              </>
+            )}
           </div>
         </div>
       )}
