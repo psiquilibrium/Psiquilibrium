@@ -39,8 +39,10 @@ function getWeekDates(base){const d=new Date(base);const diff=d.getDay()===0?-6:
 function fmt(d){return `${String(d.getDate()).padStart(2,"0")}/${String(d.getMonth()+1).padStart(2,"0")}`;}
 function dateKey(d){return d.toISOString().slice(0,10);}
 
+const SCRIPT_URL="https://script.google.com/macros/s/AKfycbwtbD8VGPkhFg0nMuRW2uvIjLnLlVXclYvqRlyqgYpz_kKNLxSX2FrYCdmwW8mQhudv/exec";
 const STORAGE_KEY="psiquilibrium_cfg";
-function loadConfig(){try{return JSON.parse(localStorage.getItem(STORAGE_KEY))||{};}catch{return {};}}
+function loadConfig(){return {scriptUrl: SCRIPT_URL};}
+function saveConfig(){}
 function saveConfig(cfg){localStorage.setItem(STORAGE_KEY,JSON.stringify(cfg));}
 
 async function apiCall(url,params){
