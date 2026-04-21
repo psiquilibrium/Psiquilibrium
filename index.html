@@ -1,0 +1,386 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+<title>Psiquilibrium</title>
+<script src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+<script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+<script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+<style>
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+  body { font-family: system-ui, sans-serif; font-size: 15px; line-height: 1.5; background: #f5f5f3; color: #1a1a18; min-height: 100vh; }
+  #root { max-width: 900px; margin: 0 auto; padding: 1rem; }
+  input, select, textarea { font-family: inherit; font-size: 14px; padding: 8px 10px; border: 0.5px solid #ccc; border-radius: 8px; width: 100%; background: #fff; color: #1a1a18; outline: none; }
+  input:focus, select:focus { border-color: #378ADD; box-shadow: 0 0 0 2px #378ADD33; }
+  button { font-family: inherit; font-size: 13px; padding: 7px 14px; border: 0.5px solid #ccc; border-radius: 8px; background: transparent; color: #1a1a18; cursor: pointer; transition: background 0.15s; }
+  button:hover { background: #f0f0ee; }
+  button:disabled { opacity: 0.5; cursor: default; }
+  @media (prefers-color-scheme: dark) {
+    body { background: #1a1a18; color: #f0efe8; }
+    input, select { background: #2c2c2a; border-color: #444; color: #f0efe8; }
+    button { color: #f0efe8; border-color: #444; }
+    button:hover { background: #2c2c2a; }
+  }
+</style>
+</head>
+<body>
+<div id="root"></div>
+<script type="text/babel">
+const { useState, useEffect, useCallback } = React;
+
+const CONSULTORIOS = ["Consultorio 1","Consultorio 2","Consultorio 3","Consultorio 4"];
+const DIAS = ["Lun","Mar","Mié","Jue","Vie","Sáb"];
+const DIAS_FULL = ["Lunes","Martes","Miércoles","Jueves","Viernes","Sábado"];
+const FRANJAS = Array.from({length:10},(_,i)=>`${String(8+i).padStart(2,"0")}:00 – ${String(9+i).padStart(2,"0")}:00`);
+const COLOR_POOL = ["#7F77DD","#1D9E75","#D85A30","#D4537E","#378ADD","#639922","#BA7517","#E24B4A","#533AB7","#0F6E56","#993556","#3B6D11","#185FA5","#993C1D","#0C447C","#27500A"];
+
+function getWeekDates(base){const d=new Date(base);const diff=d.getDay()===0?-6:1-d.getDay();const mon=new Date(d);mon.setDate(d.getDate()+diff);return Array.from({length:6},(_,i)=>{const nd=new Date(mon);nd.setDate(mon.getDate()+i);return nd;});}
+function fmt(d){return `${String(d.getDate()).padStart(2,"0")}/${String(d.getMonth()+1).padStart(2,"0")}`;}
+function dateKey(d){return d.toISOString().slice(0,10);}
+
+const STORAGE_KEY="psiquilibrium_cfg";
+function loadConfig(){try{return JSON.parse(localStorage.getItem(STORAGE_KEY))||{};}catch{return {};}}
+function saveConfig(cfg){localStorage.setItem(STORAGE_KEY,JSON.stringify(cfg));}
+
+async function apiCall(url,params){
+  const u=new URL(url);
+  Object.entries(params).forEach(([k,v])=>u.searchParams.set(k,typeof v==="object"?JSON.stringify(v):v));
+  const res=await fetch(u.toString());
+  return res.json();
+}
+async function apiPost(url,body){
+  const res=await fetch(url,{method:"POST",body:JSON.stringify(body),headers:{"Content-Type":"application/json"}});
+  return res.json();
+}
+
+function App(){
+  const [cfg,setCfg]=useState(loadConfig);
+  const [screen,setScreen]=useState("login");
+  const [currentUser,setCurrentUser]=useState(null);
+  const [token,setToken]=useState(null);
+  const [reservas,setReservas]=useState([]);
+  const [allUsers,setAllUsers]=useState([]);
+  const [userColors,setUserColors]=useState({});
+  const [loading,setLoading]=useState(false);
+  const [error,setError]=useState(null);
+  const [toast,setToast]=useState(null);
+  const [weekBase,setWeekBase]=useState(new Date());
+  const [selectedConsultorio,setSelectedConsultorio]=useState(0);
+  const [view,setView]=useState("semana");
+  const [modal,setModal]=useState(null);
+  const [form,setForm]=useState({nota:"",duracion:"60"});
+  const [conflict,setConflict]=useState(false);
+  const [loginForm,setLoginForm]=useState({userId:"",password:""});
+  const [configForm,setConfigForm]=useState({scriptUrl:cfg.scriptUrl||""});
+
+  const weekDates=getWeekDates(weekBase);
+  const isAdmin=currentUser?.rol==="admin";
+  const isSocio=currentUser?.rol==="socio"||isAdmin;
+
+  const showToast=(msg,type="success")=>{setToast({msg,type});setTimeout(()=>setToast(null),3000);};
+
+  useEffect(()=>{
+    const colors={};
+    allUsers.forEach((u,i)=>{colors[u.id]=COLOR_POOL[i%COLOR_POOL.length];});
+    setUserColors(colors);
+  },[allUsers.length]);
+
+  const fetchReservas=useCallback(async(tkn)=>{
+    setLoading(true);
+    try{
+      const data=await apiCall(cfg.scriptUrl,{action:"getReservas",token:tkn||token});
+      if(data.ok) setReservas(data.reservas.map(r=>({...r,franja:Number(r.franja),duracion:Number(r.duracion),consultorio:Number(r.consultorio)})));
+      else setError(data.error);
+    }catch{setError("Error al cargar reservas. Verificar conexión.");}
+    setLoading(false);
+  },[cfg.scriptUrl,token]);
+
+  const handleLogin=async()=>{
+    setError(null);setLoading(true);
+    try{
+      const data=await apiPost(cfg.scriptUrl,{action:"login",...loginForm});
+      if(data.ok){
+        setCurrentUser(data.user);setToken(data.token);
+        setAllUsers(data.users||[]);
+        setScreen("app");
+        fetchReservas(data.token);
+      } else setError(data.error||"Credenciales incorrectas");
+    }catch{setError("No se pudo conectar. Verificar la URL del script.");}
+    setLoading(false);
+  };
+
+  const hasConflict=(consultorio,fecha,franja,duracion,excludeId=null)=>{
+    const startMin=franja*60,endMin=startMin+parseInt(duracion);
+    return reservas.some(r=>{
+      if(r.id===excludeId||r.consultorio!==consultorio||r.fecha!==fecha) return false;
+      const rS=r.franja*60,rE=rS+r.duracion;
+      return startMin<rE&&endMin>rS;
+    });
+  };
+
+  const getReserva=(consultorio,fecha,franja)=>reservas.find(r=>{
+    if(r.consultorio!==consultorio||r.fecha!==fecha) return false;
+    const rS=r.franja*60,rE=rS+r.duracion;
+    return franja*60>=rS&&franja*60<rE;
+  });
+
+  const handleSave=async()=>{
+    const dur=parseInt(form.duracion);
+    if(hasConflict(modal.consultorio,modal.fecha,modal.franja,dur)){setConflict(true);return;}
+    setLoading(true);
+    try{
+      const data=await apiPost(cfg.scriptUrl,{action:"crearReserva",token,consultorio:modal.consultorio,fecha:modal.fecha,franja:modal.franja,duracion:dur,nota:form.nota});
+      if(data.ok){await fetchReservas(token);setModal(null);showToast("Reserva creada");}
+      else setError(data.error);
+    }catch{setError("Error al guardar");}
+    setLoading(false);
+  };
+
+  const handleUpdate=async()=>{
+    const dur=parseInt(form.duracion);
+    if(hasConflict(modal.consultorio,modal.fecha,modal.franja,dur,modal.reserva.id)){setConflict(true);return;}
+    setLoading(true);
+    try{
+      const data=await apiPost(cfg.scriptUrl,{action:"editarReserva",token,id:modal.reserva.id,duracion:dur,nota:form.nota});
+      if(data.ok){await fetchReservas(token);setModal(null);showToast("Reserva actualizada");}
+      else setError(data.error);
+    }catch{setError("Error al actualizar");}
+    setLoading(false);
+  };
+
+  const handleDelete=async(id)=>{
+    setLoading(true);
+    try{
+      const data=await apiPost(cfg.scriptUrl,{action:"eliminarReserva",token,id});
+      if(data.ok){await fetchReservas(token);setModal(null);showToast("Reserva cancelada","danger");}
+      else setError(data.error);
+    }catch{setError("Error al cancelar");}
+    setLoading(false);
+  };
+
+  const openModal=(consultorio,fecha,franja)=>{
+    const existing=getReserva(consultorio,fecha,franja);
+    if(existing){
+      const canEdit=isAdmin||currentUser.id===existing.userId;
+      setModal({mode:"view",reserva:existing,canEdit,consultorio,fecha,franja});
+      setForm({nota:existing.nota,duracion:String(existing.duracion)});
+    } else {
+      if(isSocio&&!isAdmin) return;
+      setModal({mode:"nueva",consultorio,fecha,franja});
+      setForm({nota:"",duracion:"60"});setConflict(false);
+    }
+  };
+
+  const handleSaveConfig=()=>{
+    const newCfg={...cfg,scriptUrl:configForm.scriptUrl.trim()};
+    setCfg(newCfg);saveConfig(newCfg);
+    setScreen("login");showToast("Configuración guardada");
+  };
+
+  const s={
+    card:{background:"#fff",border:"0.5px solid #ddd",borderRadius:12,padding:"1rem 1.25rem"},
+    label:{fontSize:12,color:"#888",display:"block",marginBottom:4},
+    muted:{fontSize:12,color:"#888"},
+    badge:(bg,fg)=>({fontSize:11,background:bg,color:fg,padding:"2px 8px",borderRadius:6,display:"inline-block"}),
+  };
+
+  // CONFIG
+  if(screen==="config") return (
+    <div style={{maxWidth:440,margin:"2rem auto",...s.card}}>
+      <div style={{fontWeight:500,fontSize:16,marginBottom:4}}>Configuración</div>
+      <div style={{...s.muted,marginBottom:20}}>Conectar con Google Sheets</div>
+      <label style={s.label}>URL del Apps Script</label>
+      <input value={configForm.scriptUrl} onChange={e=>setConfigForm(f=>({...f,scriptUrl:e.target.value}))} placeholder="https://script.google.com/macros/s/.../exec" style={{fontSize:12,marginBottom:6}} />
+      <div style={{...s.muted,marginBottom:20}}>Pegar la URL generada al publicar el Apps Script.</div>
+      <div style={{display:"flex",gap:8,justifyContent:"flex-end"}}>
+        <button onClick={()=>setScreen("login")} style={{color:"#888"}}>Cancelar</button>
+        <button onClick={handleSaveConfig}>Guardar</button>
+      </div>
+    </div>
+  );
+
+  // LOGIN
+  if(screen==="login") return (
+    <div style={{maxWidth:360,margin:"3rem auto",...s.card}}>
+      <div style={{fontWeight:500,fontSize:20,marginBottom:2}}>Psiquilibrium</div>
+      <div style={{...s.muted,marginBottom:20}}>Gestión de consultorios</div>
+      {!cfg.scriptUrl&&<div style={{...s.badge("#fff8e6","#b07800"),marginBottom:16,padding:"8px 12px",fontSize:13,borderRadius:8,display:"block"}}>⚠ Sin URL configurada — configurar antes de continuar.</div>}
+      <label style={s.label}>Usuario</label>
+      <input value={loginForm.userId} onChange={e=>setLoginForm(f=>({...f,userId:e.target.value}))} placeholder="tu ID de usuario" style={{marginBottom:12}} onKeyDown={e=>e.key==="Enter"&&handleLogin()} />
+      <label style={s.label}>Contraseña</label>
+      <input type="password" value={loginForm.password} onChange={e=>setLoginForm(f=>({...f,password:e.target.value}))} style={{marginBottom:16}} onKeyDown={e=>e.key==="Enter"&&handleLogin()} />
+      {error&&<div style={{fontSize:12,color:"#c0392b",marginBottom:12,padding:"8px 10px",background:"#fdf0ee",borderRadius:8}}>{error}</div>}
+      <button onClick={handleLogin} disabled={loading||!cfg.scriptUrl} style={{width:"100%",marginBottom:10,fontWeight:500}}>{loading?"Entrando…":"Entrar"}</button>
+      <button onClick={()=>setScreen("config")} style={{width:"100%",fontSize:12,color:"#888"}}>⚙ Configurar URL del script</button>
+    </div>
+  );
+
+  // APP
+  const misReservas=reservas.filter(r=>r.userId===currentUser?.id).sort((a,b)=>a.fecha.localeCompare(b.fecha)||a.franja-b.franja);
+  const todasReservas=[...reservas].sort((a,b)=>a.fecha.localeCompare(b.fecha)||a.franja-b.franja);
+
+  return (
+    <div style={{paddingBottom:"2rem"}}>
+      {toast&&<div style={{position:"fixed",top:16,right:16,zIndex:999,padding:"10px 18px",borderRadius:8,background:toast.type==="danger"?"#fdf0ee":"#eafaf3",color:toast.type==="danger"?"#c0392b":"#0f6e56",fontSize:13,border:`0.5px solid ${toast.type==="danger"?"#f5c6c0":"#9fe1cb"}`}}>{toast.msg}</div>}
+
+      <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:16,flexWrap:"wrap",gap:8,paddingTop:"0.5rem"}}>
+        <div style={{display:"flex",alignItems:"center",gap:8}}>
+          <span style={{fontWeight:500,fontSize:17}}>Psiquilibrium</span>
+          <span style={{...s.badge("#f0f0ee","#666")}}>{currentUser.nombre} · {currentUser.rol}</span>
+        </div>
+        <div style={{display:"flex",gap:6,flexWrap:"wrap"}}>
+          {["semana","mis reservas",...(isSocio?["todas"]:[])].map(v=>(
+            <button key={v} onClick={()=>setView(v)} style={{fontSize:12,background:view===v?"#e6f1fb":"transparent",color:view===v?"#185fa5":"#888",border:`0.5px solid ${view===v?"#b5d4f4":"#ddd"}`}}>{v.charAt(0).toUpperCase()+v.slice(1)}</button>
+          ))}
+          <button onClick={()=>fetchReservas(token)} style={{fontSize:12,color:"#888"}} title="Actualizar">↺</button>
+          <button onClick={()=>{setScreen("login");setCurrentUser(null);setToken(null);}} style={{fontSize:12,color:"#888"}}>Salir</button>
+        </div>
+      </div>
+
+      {loading&&<div style={{...s.muted,marginBottom:8}}>Cargando…</div>}
+      {error&&<div style={{fontSize:12,color:"#c0392b",marginBottom:8,padding:"8px 12px",background:"#fdf0ee",borderRadius:8}}>{error} <button onClick={()=>setError(null)} style={{fontSize:11,marginLeft:8}}>✕</button></div>}
+
+      {view==="semana"&&(<>
+        <div style={{display:"flex",alignItems:"center",gap:8,marginBottom:12,flexWrap:"wrap"}}>
+          <button onClick={()=>{const d=new Date(weekBase);d.setDate(d.getDate()-7);setWeekBase(d);}}>← Anterior</button>
+          <span style={s.muted}>{fmt(weekDates[0])} – {fmt(weekDates[5])}</span>
+          <button onClick={()=>{const d=new Date(weekBase);d.setDate(d.getDate()+7);setWeekBase(d);}}>Siguiente →</button>
+          <button onClick={()=>setWeekBase(new Date())} style={{fontSize:12,color:"#888"}}>Hoy</button>
+        </div>
+        <div style={{display:"flex",gap:6,marginBottom:10,flexWrap:"wrap"}}>
+          {CONSULTORIOS.map((c,i)=>(
+            <button key={i} onClick={()=>setSelectedConsultorio(i)} style={{fontSize:12,background:selectedConsultorio===i?"#e6f1fb":"transparent",color:selectedConsultorio===i?"#185fa5":"#888",border:`0.5px solid ${selectedConsultorio===i?"#b5d4f4":"#ddd"}`}}>{c}</button>
+          ))}
+        </div>
+        <div style={{overflowX:"auto"}}>
+          <table style={{width:"100%",borderCollapse:"collapse",tableLayout:"fixed",fontSize:12}}>
+            <thead>
+              <tr>
+                <th style={{width:70,padding:"6px 4px",color:"#888",fontWeight:400,textAlign:"left",borderBottom:"0.5px solid #ddd"}}>Hora</th>
+                {weekDates.map((d,i)=>{
+                  const isToday=dateKey(d)===dateKey(new Date());
+                  return <th key={i} style={{padding:"6px 4px",fontWeight:isToday?500:400,color:isToday?"#185fa5":"#888",textAlign:"center",borderBottom:"0.5px solid #ddd",background:isToday?"#e6f1fb":"transparent"}}>{DIAS[i]}<br/><span style={{fontSize:11}}>{fmt(d)}</span></th>;
+                })}
+              </tr>
+            </thead>
+            <tbody>
+              {FRANJAS.map((franja,fi)=>(
+                <tr key={fi}>
+                  <td style={{padding:"3px 4px",color:"#888",fontSize:11,borderBottom:"0.5px solid #eee",whiteSpace:"nowrap"}}>{franja.split(" – ")[0]}</td>
+                  {weekDates.map((d,di)=>{
+                    const fecha=dateKey(d);
+                    const r=getReserva(selectedConsultorio,fecha,fi);
+                    const isStart=r&&r.franja===fi;
+                    const color=r?userColors[r.userId]||"#888":null;
+                    const usuario=r?allUsers.find(u=>u.id===r.userId):null;
+                    return (
+                      <td key={di} onClick={()=>openModal(selectedConsultorio,fecha,fi)} style={{padding:"2px 3px",height:30,borderBottom:"0.5px solid #eee",cursor:isSocio&&!isAdmin&&!r?"default":"pointer",background:r?color+"22":"transparent",borderLeft:r?`3px solid ${color}`:"3px solid transparent",verticalAlign:"middle"}}>
+                        {isStart&&<div style={{fontSize:10,color,fontWeight:500,overflow:"hidden",whiteSpace:"nowrap",textOverflow:"ellipsis"}}>{usuario?.nombre.split(" ").slice(-1)[0]||r.userId}{r.nota?` · ${r.nota.slice(0,14)}`:""}</div>}
+                      </td>
+                    );
+                  })}
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+        <div style={{marginTop:12,display:"flex",gap:12,flexWrap:"wrap"}}>
+          {allUsers.map(u=>(
+            <div key={u.id} style={{display:"flex",alignItems:"center",gap:5,fontSize:11,color:"#888"}}>
+              <span style={{width:10,height:10,borderRadius:2,background:userColors[u.id]||"#888",display:"inline-block"}}></span>{u.nombre}
+            </div>
+          ))}
+        </div>
+      </>)}
+
+      {view==="mis reservas"&&(
+        <div>
+          <div style={{fontWeight:500,marginBottom:12,fontSize:14}}>Mis reservas</div>
+          {misReservas.length===0&&<p style={s.muted}>No tienes reservas registradas.</p>}
+          {misReservas.map(r=>(
+            <div key={r.id} style={{...s.card,marginBottom:8,display:"flex",justifyContent:"space-between",alignItems:"center"}}>
+              <div>
+                <div style={{fontWeight:500,fontSize:13}}>{CONSULTORIOS[r.consultorio]} · {FRANJAS[r.franja]?.split(" – ")[0]}</div>
+                <div style={s.muted}>{r.fecha} · {r.duracion} min {r.nota?`· ${r.nota}`:""}</div>
+              </div>
+              <button onClick={()=>handleDelete(r.id)} style={{fontSize:11,color:"#c0392b",background:"#fdf0ee",border:"0.5px solid #f5c6c0"}}>Cancelar</button>
+            </div>
+          ))}
+        </div>
+      )}
+
+      {view==="todas"&&isSocio&&(
+        <div>
+          <div style={{fontWeight:500,marginBottom:12,fontSize:14}}>Todas las reservas ({todasReservas.length})</div>
+          {todasReservas.map(r=>{
+            const u=allUsers.find(x=>x.id===r.userId);
+            const color=userColors[r.userId]||"#888";
+            return (
+              <div key={r.id} style={{...s.card,borderLeft:`3px solid ${color}`,marginBottom:8,display:"flex",justifyContent:"space-between",alignItems:"center"}}>
+                <div>
+                  <div style={{fontWeight:500,fontSize:13}}>{CONSULTORIOS[r.consultorio]} · {FRANJAS[r.franja]?.split(" – ")[0]}</div>
+                  <div style={s.muted}>{r.fecha} · {u?.nombre||r.userId} · {r.duracion} min {r.nota?`· ${r.nota}`:""}</div>
+                </div>
+                {isAdmin&&<button onClick={()=>handleDelete(r.id)} style={{fontSize:11,color:"#c0392b",background:"#fdf0ee",border:"0.5px solid #f5c6c0"}}>Cancelar</button>}
+              </div>
+            );
+          })}
+        </div>
+      )}
+
+      {modal&&(
+        <div style={{position:"fixed",inset:0,background:"rgba(0,0,0,0.35)",display:"flex",alignItems:"center",justifyContent:"center",zIndex:100,padding:16}}>
+          <div style={{...s.card,width:"100%",maxWidth:380}}>
+            {modal.mode==="nueva"&&(<>
+              <div style={{fontWeight:500,fontSize:15,marginBottom:4}}>Nueva reserva</div>
+              <div style={{...s.muted,marginBottom:16}}>{CONSULTORIOS[modal.consultorio]} · {DIAS_FULL[weekDates.findIndex(d=>dateKey(d)===modal.fecha)]||""} {modal.fecha} · {FRANJAS[modal.franja]}</div>
+              <label style={s.label}>Duración</label>
+              <select value={form.duracion} onChange={e=>{setForm(f=>({...f,duracion:e.target.value}));setConflict(false);}} style={{marginBottom:12}}>
+                <option value="60">60 min (1 hora)</option>
+                <option value="120">120 min (2 horas)</option>
+                <option value="180">180 min (3 horas)</option>
+              </select>
+              <label style={s.label}>Nota libre (opcional)</label>
+              <input value={form.nota} onChange={e=>setForm(f=>({...f,nota:e.target.value}))} placeholder="Ej: nombre paciente, tipo de consulta..." style={{marginBottom:16}} />
+              {conflict&&<div style={{fontSize:12,color:"#c0392b",marginBottom:8}}>Conflicto con otra reserva en ese horario.</div>}
+              <div style={{display:"flex",gap:8,justifyContent:"flex-end"}}>
+                <button onClick={()=>setModal(null)} style={{color:"#888"}}>Cancelar</button>
+                <button onClick={handleSave} disabled={loading}>Reservar</button>
+              </div>
+            </>)}
+            {modal.mode==="view"&&(<>
+              <div style={{fontWeight:500,fontSize:15,marginBottom:4}}>Reserva</div>
+              <div style={{...s.muted,marginBottom:12}}>{CONSULTORIOS[modal.reserva.consultorio]} · {modal.reserva.fecha} · {FRANJAS[modal.reserva.franja]}</div>
+              <div style={{fontSize:13,marginBottom:8}}><span style={{color:"#888"}}>Profesional: </span>{allUsers.find(u=>u.id===modal.reserva.userId)?.nombre||modal.reserva.userId}</div>
+              {modal.canEdit?(<>
+                <label style={{...s.label,marginTop:8}}>Duración</label>
+                <select value={form.duracion} onChange={e=>{setForm(f=>({...f,duracion:e.target.value}));setConflict(false);}} style={{marginBottom:10}}>
+                  <option value="60">60 min</option>
+                  <option value="120">120 min</option>
+                  <option value="180">180 min</option>
+                </select>
+                <label style={s.label}>Nota</label>
+                <input value={form.nota} onChange={e=>setForm(f=>({...f,nota:e.target.value}))} style={{marginBottom:12}} />
+                {conflict&&<div style={{fontSize:12,color:"#c0392b",marginBottom:8}}>Conflicto de horario.</div>}
+                <div style={{display:"flex",gap:8,justifyContent:"flex-end"}}>
+                  <button onClick={()=>handleDelete(modal.reserva.id)} style={{color:"#c0392b",background:"#fdf0ee",border:"0.5px solid #f5c6c0"}}>Cancelar reserva</button>
+                  <button onClick={()=>setModal(null)} style={{color:"#888"}}>Cerrar</button>
+                  <button onClick={handleUpdate} disabled={loading}>Guardar</button>
+                </div>
+              </>):(<>
+                <div style={{fontSize:13,marginBottom:12}}><span style={{color:"#888"}}>Nota: </span>{modal.reserva.nota||"—"}</div>
+                <div style={{display:"flex",justifyContent:"flex-end"}}><button onClick={()=>setModal(null)}>Cerrar</button></div>
+              </>)}
+            </>)}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+ReactDOM.createRoot(document.getElementById("root")).render(<App/>);
+</script>
+</body>
+</html>
