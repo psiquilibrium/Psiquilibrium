@@ -231,7 +231,7 @@ function App(){
           <span style={{fontSize:12,background:"var(--cyan-light)",padding:"2px 8px",borderRadius:6,color:"var(--navy)"}}>{currentUser.nombre} · {currentUser.rol}</span>
         </div>
         <div style={{display:"flex",gap:6,flexWrap:"wrap"}}>
-          {["semana","mis reservas",...(isSocio?["todas"]:[])].map(v=>(
+          {["semana","todos","mis reservas",...(isSocio?["todas"]:[])].map(v=>(
             <button key={v} onClick={()=>setView(v)} style={{fontSize:12,background:view===v?"var(--navy)":"transparent",color:view===v?"#fff":"var(--navy)",border:`1px solid ${view===v?"var(--navy)":"var(--border)"}`}}>{v.charAt(0).toUpperCase()+v.slice(1)}</button>
           ))}
           <button onClick={()=>fetchReservas(token)} style={{fontSize:12,color:"var(--text-muted)"}} title="Actualizar">↺</button>
@@ -295,7 +295,60 @@ function App(){
         </div>
       </>)}
 
-      {view==="mis reservas"&&(
+      {view==="todos"&&(<>
+        <div style={{display:"flex",alignItems:"center",gap:8,marginBottom:12,flexWrap:"wrap"}}>
+          <button onClick={()=>{const d=new Date(weekBase);d.setDate(d.getDate()-7);setWeekBase(d);}}>← Anterior</button>
+          <span style={s.muted}>{fmt(weekDates[0])} – {fmt(weekDates[5])}</span>
+          <button onClick={()=>{const d=new Date(weekBase);d.setDate(d.getDate()+7);setWeekBase(d);}}>Siguiente →</button>
+          <button onClick={()=>setWeekBase(new Date())} style={{fontSize:12,color:"var(--text-muted)"}}>Hoy</button>
+        </div>
+        <div style={{overflowX:"auto"}}>
+          {CONSULTORIOS.map((consNombre,ci)=>(
+            <div key={ci} style={{marginBottom:20}}>
+              <div style={{fontWeight:600,fontSize:13,color:"var(--navy)",marginBottom:6,padding:"4px 8px",background:"var(--cyan-light)",borderRadius:6,display:"inline-block"}}>{consNombre}</div>
+              <table style={{width:"100%",borderCollapse:"collapse",tableLayout:"fixed",fontSize:12}}>
+                <thead>
+                  <tr>
+                    <th style={{width:70,padding:"5px 4px",color:"var(--text-muted)",fontWeight:400,textAlign:"left",borderBottom:"1px solid var(--border)"}}>Hora</th>
+                    {weekDates.map((d,i)=>{
+                      const isToday=dateKey(d)===dateKey(new Date());
+                      return <th key={i} style={{padding:"5px 4px",fontWeight:isToday?600:400,color:isToday?"var(--white)":"var(--text-muted)",textAlign:"center",borderBottom:"1px solid var(--border)",background:isToday?"var(--navy)":"transparent"}}>{DIAS[i]}<br/><span style={{fontSize:10}}>{fmt(d)}</span></th>;
+                    })}
+                  </tr>
+                </thead>
+                <tbody>
+                  {FRANJAS.map((franja,fi)=>(
+                    <tr key={fi}>
+                      <td style={{padding:"2px 4px",color:"var(--text-muted)",fontSize:10,borderBottom:"1px solid var(--border)",whiteSpace:"nowrap"}}>{franja.split(" – ")[0]}</td>
+                      {weekDates.map((d,di)=>{
+                        const fecha=dateKey(d);
+                        const r=getReserva(ci,fecha,fi);
+                        const isStart=r&&r.franja===fi;
+                        const color=r?COLORS[(allUsers.findIndex(u=>u.id===r.userId))%COLORS.length]||"var(--navy)":null;
+                        const usuario=r?allUsers.find(u=>u.id===r.userId):null;
+                        return(
+                          <td key={di} onClick={()=>openModal(ci,fecha,fi)} style={{padding:"2px 3px",height:26,borderBottom:"1px solid var(--border)",cursor:isSocio&&!isAdmin&&!r?"default":"pointer",background:r?color+"18":"transparent",borderLeft:r?`3px solid ${color}`:"3px solid transparent",verticalAlign:"middle"}}>
+                            {isStart&&<div style={{fontSize:9,color:"var(--navy)",fontWeight:600,overflow:"hidden",whiteSpace:"nowrap",textOverflow:"ellipsis"}}>{usuario?.nombre.split(" ").slice(-1)[0]||r.userId}{r.nota?` · ${r.nota.slice(0,12)}`:""}</div>}
+                          </td>
+                        );
+                      })}
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          ))}
+        </div>
+        <div style={{marginTop:8,display:"flex",gap:12,flexWrap:"wrap"}}>
+          {allUsers.map((u,i)=>(
+            <div key={u.id} style={{display:"flex",alignItems:"center",gap:5,fontSize:11,color:"var(--text-muted)"}}>
+              <span style={{width:10,height:10,borderRadius:2,background:COLORS[i%COLORS.length],display:"inline-block"}}></span>{u.nombre}
+            </div>
+          ))}
+        </div>
+      </>)}
+
+
         <div>
           <div style={{fontWeight:500,marginBottom:12,fontSize:14}}>Mis reservas</div>
           {misReservas.length===0&&<p style={s.muted}>No tienes reservas registradas.</p>}
