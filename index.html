@@ -41,9 +41,8 @@ function dateKey(d){return d.toISOString().slice(0,10);}
 
 const SCRIPT_URL="https://script.google.com/macros/s/AKfycbwtbD8VGPkhFg0nMuRW2uvIjLnLlVXclYvqRlyqgYpz_kKNLxSX2FrYCdmwW8mQhudv/exec";
 const STORAGE_KEY="psiquilibrium_cfg";
-function loadConfig(){return {scriptUrl: SCRIPT_URL};}
+function loadConfig(){return {scriptUrl:SCRIPT_URL};}
 function saveConfig(){}
-function saveConfig(cfg){localStorage.setItem(STORAGE_KEY,JSON.stringify(cfg));}
 
 async function apiCall(url,params){
   const u=new URL(url);
