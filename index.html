@@ -338,6 +338,15 @@ function App(){
             {modal.mode==="nueva"&&(<>
               <div style={{fontWeight:500,fontSize:15,marginBottom:4}}>Nueva reserva</div>
               <div style={{...s.muted,marginBottom:16}}>{CONSULTORIOS[modal.consultorio]} · {DIAS_FULL[weekDates.findIndex(d=>dateKey(d)===modal.fecha)]||""} {modal.fecha} · {FRANJAS[modal.franja]}</div>
+              {isAdmin&&(<>
+                <label style={s.label}>Profesional</label>
+                <select value={form.profesionalId||""} onChange={e=>setForm(f=>({...f,profesionalId:e.target.value}))} style={{marginBottom:12}}>
+                  <option value="">— Seleccionar —</option>
+                  {allUsers.filter(u=>u.rol==="profesional").map(u=>(
+                    <option key={u.id} value={u.id}>{u.nombre}</option>
+                  ))}
+                </select>
+              </>)}
               <label style={s.label}>Duración</label>
               <select value={form.duracion} onChange={e=>{setForm(f=>({...f,duracion:e.target.value}));setConflict(false);}} style={{marginBottom:12}}>
                 <option value="60">60 min (1 hora)</option>
@@ -349,7 +358,7 @@ function App(){
               {conflict&&<div style={{fontSize:12,color:"#c0392b",marginBottom:8}}>Conflicto con otra reserva en ese horario.</div>}
               <div style={{display:"flex",gap:8,justifyContent:"flex-end"}}>
                 <button onClick={()=>setModal(null)} style={{color:"#888"}}>Cancelar</button>
-                <button onClick={handleSave} disabled={loading}>Reservar</button>
+                <button onClick={handleSave} disabled={loading||(isAdmin&&!form.profesionalId)}>Reservar</button>
               </div>
             </>)}
             {modal.mode==="view"&&(<>
