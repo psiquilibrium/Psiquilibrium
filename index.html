@@ -9,18 +9,20 @@
 <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
 <style>
 :root{
-  --navy:#1B3A6B;--navy-light:#2a5298;--cyan:#4DC8E8;--cyan-light:#e8f7fc;
-  --bg:#f0f7fa;--white:#ffffff;--text:#1B3A6B;--text-muted:#5a7a9a;
+  --navy:#1B3A6B;--cyan:#4DC8E8;--cyan-light:#e8f7fc;
+  --bg:#f0f7fa;--white:#fff;--text:#1B3A6B;--text-muted:#5a7a9a;
   --border:#c5dce8;--danger:#c0392b;--danger-bg:#fdf0ee;--success:#0f6e56;--success-bg:#eafaf3;
+  --blocked:#f5e6c8;--blocked-border:#c8a84b;
 }
 *,*::before,*::after{box-sizing:border-box;margin:0;padding:0;}
 body{font-family:system-ui,sans-serif;font-size:15px;line-height:1.5;background:var(--bg);color:var(--text);min-height:100vh;}
 #root{max-width:1100px;margin:0 auto;padding:1rem;}
-input,select,textarea{font-family:inherit;font-size:14px;padding:8px 10px;border:1px solid var(--border);border-radius:8px;width:100%;background:var(--white);color:var(--text);outline:none;}
+input,select{font-family:inherit;font-size:14px;padding:8px 10px;border:1px solid var(--border);border-radius:8px;width:100%;background:var(--white);color:var(--text);outline:none;}
 input:focus,select:focus{border-color:var(--cyan);box-shadow:0 0 0 2px #4DC8E833;}
 button{font-family:inherit;font-size:13px;padding:7px 14px;border:1px solid var(--border);border-radius:8px;background:transparent;color:var(--navy);cursor:pointer;transition:background 0.15s;}
 button:hover{background:var(--cyan-light);}
 button:disabled{opacity:0.5;cursor:default;}
+.drag-over{outline:2px dashed var(--cyan);background:var(--cyan-light) !important;}
 </style>
 </head>
 <body>
@@ -32,24 +34,14 @@ const SCRIPT_URL="https://script.google.com/macros/s/AKfycbwtbD8VGPkhFg0nMuRW2uv
 const CONSULTORIOS=["Consultorio 1","Consultorio 2","Consultorio 3","Consultorio 4"];
 const DIAS=["Lun","Mar","Mié","Jue","Vie","Sáb"];
 const DIAS_FULL=["Lunes","Martes","Miércoles","Jueves","Viernes","Sábado"];
+const ALL_FRANJAS=Array.from({length:10},(_,i)=>`${String(8+i).padStart(2,"0")}:00`);
+const DURACIONES=[{l:"1 hora",v:60},{l:"1h 30min",v:90},{l:"2 horas",v:120},{l:"2h 30min",v:150},{l:"3 horas",v:180},{l:"3h 30min",v:210},{l:"4 horas",v:240}];
 const COLORS=["#1B3A6B","#2a7ab5","#0f6e56","#9B3FA0","#b07800","#c05000","#1a6b5a","#8B2252","#3a6b1B","#005a8b","#6b3a1B","#1B5a6b","#5a1B6b","#6b5a1B","#2a5298","#4a7820"];
-const DURACIONES=[
-  {label:"1 hora",val:60},{label:"1 hora 30 min",val:90},{label:"2 horas",val:120},
-  {label:"2 horas 30 min",val:150},{label:"3 horas",val:180},{label:"3 horas 30 min",val:210},{label:"4 horas",val:240}
-];
 const SESSION_KEY="psiq_session";
 
-function getFranjas(diaSemana){
-  // diaSemana: 0=Lun...5=Sáb
-  const fin=diaSemana===5?12:18;
-  return Array.from({length:fin-8},(_,i)=>`${String(8+i).padStart(2,"0")}:00 – ${String(9+i).padStart(2,"0")}:00`);
-}
-const FRANJAS_SEMANA=Array.from({length:10},(_,i)=>`${String(8+i).padStart(2,"0")}:00 – ${String(9+i).padStart(2,"0")}:00`);
-
 function getWeekDates(base){
-  const d=new Date(base);
-  const diff=d.getDay()===0?-6:1-d.getDay();
-  const mon=new Date(d);mon.setDate(d.getDate()+diff);
+  const d=new Date(base),diff=d.getDay()===0?-6:1-d.getDay(),mon=new Date(d);
+  mon.setDate(d.getDate()+diff);
   return Array.from({length:6},(_,i)=>{const nd=new Date(mon);nd.setDate(mon.getDate()+i);return nd;});
 }
 function fmt(d){return `${String(d.getDate()).padStart(2,"0")}/${String(d.getMonth()+1).padStart(2,"0")}`;}
@@ -67,6 +59,7 @@ function App(){
   const [currentUser,setCurrentUser]=useState(null);
   const [token,setToken]=useState(null);
   const [reservas,setReservas]=useState([]);
+  const [bloqueos,setBloqueos]=useState([]);
   const [allUsers,setAllUsers]=useState([]);
   const [loading,setLoading]=useState(false);
   const [error,setError]=useState(null);
@@ -75,9 +68,12 @@ function App(){
   const [selCons,setSelCons]=useState(0);
   const [view,setView]=useState("todos");
   const [modal,setModal]=useState(null);
+  const [bloqueoModal,setBloqueoModal]=useState(null);
   const [form,setForm]=useState({nota:"",duracion:"60",profesionalId:""});
+  const [bloqueoForm,setBloqueoForm]=useState({nota:"",duracion:"60",repeticion:"ninguna"});
   const [conflict,setConflict]=useState(false);
   const [loginForm,setLoginForm]=useState({userId:"",password:""});
+  const [dragId,setDragId]=useState(null);
   const pollRef=useRef(null);
 
   const weekDates=getWeekDates(weekBase);
@@ -86,39 +82,25 @@ function App(){
 
   const showToast=(msg,type="success")=>{setToast({msg,type});setTimeout(()=>setToast(null),3000);};
 
-  // Persistir sesión
   useEffect(()=>{
     const saved=sessionStorage.getItem(SESSION_KEY);
-    if(saved){
-      try{
-        const {user,tok,users}=JSON.parse(saved);
-        setCurrentUser(user);setToken(tok);setAllUsers(users||[]);setScreen("app");
-      }catch{}
-    }
+    if(saved){try{const{user,tok,users}=JSON.parse(saved);setCurrentUser(user);setToken(tok);setAllUsers(users||[]);setScreen("app");}catch{}}
   },[]);
 
-  const saveSession=(user,tok,users)=>{
-    sessionStorage.setItem(SESSION_KEY,JSON.stringify({user,tok,users}));
-  };
-
-  const clearSession=()=>{
-    sessionStorage.removeItem(SESSION_KEY);
-  };
-
-  // Polling cada 30 segundos para tiempo real
-  const fetchReservas=useCallback(async(tkn)=>{
+  const fetchAll=useCallback(async(tkn)=>{
     try{
-      const data=await api({action:"getReservas",token:tkn||token});
-      if(data.ok) setReservas(data.reservas.map(r=>({...r,franja:Number(r.franja),duracion:Number(r.duracion),consultorio:Number(r.consultorio)})));
+      const [r,b]=await Promise.all([
+        api({action:"getReservas",token:tkn||token}),
+        api({action:"getBloqueos",token:tkn||token})
+      ]);
+      if(r.ok) setReservas(r.reservas.map(x=>({...x,franja:Number(x.franja),duracion:Number(x.duracion),consultorio:Number(x.consultorio)})));
+      if(b.ok) setBloqueos(b.bloqueos.map(x=>({...x,franja:Number(x.franja),duracion:Number(x.duracion),consultorio:Number(x.consultorio)})));
     }catch{}
   },[token]);
 
   useEffect(()=>{
-    if(screen==="app"&&token){
-      fetchReservas(token);
-      pollRef.current=setInterval(()=>fetchReservas(token),30000);
-    }
-    return()=>{if(pollRef.current) clearInterval(pollRef.current);};
+    if(screen==="app"&&token){fetchAll(token);pollRef.current=setInterval(()=>fetchAll(token),30000);}
+    return()=>{if(pollRef.current)clearInterval(pollRef.current);};
   },[screen,token]);
 
   const handleLogin=async()=>{
@@ -127,43 +109,61 @@ function App(){
       const data=await api({action:"login",userId:loginForm.userId,password:loginForm.password});
       if(data.ok){
         setCurrentUser(data.user);setToken(data.token);setAllUsers(data.users||[]);
-        saveSession(data.user,data.token,data.users||[]);
-        setScreen("app");
-        fetchReservas(data.token);
+        sessionStorage.setItem(SESSION_KEY,JSON.stringify({user:data.user,tok:data.token,users:data.users||[]}));
+        setScreen("app");fetchAll(data.token);
       } else setError(data.error||"Credenciales incorrectas");
     }catch{setError("No se pudo conectar.");}
     setLoading(false);
   };
 
-  const getUserColor=(userId)=>{
-    const idx=allUsers.findIndex(u=>u.id===userId);
-    return COLORS[idx>=0?idx%COLORS.length:0];
-  };
+  const getUserColor=uid=>{const i=allUsers.findIndex(u=>u.id===uid);return COLORS[i>=0?i%COLORS.length:0];};
 
-  const hasConflict=(consultorio,fecha,franja,duracion,excludeId=null)=>{
-    const s=franja*60,e=s+parseInt(duracion);
+  const hasConflict=(cons,fecha,franja,dur,excl=null)=>{
+    const s=franja*60,e=s+parseInt(dur);
     return reservas.some(r=>{
-      if(r.id===excludeId||r.consultorio!==consultorio||r.fecha!==fecha) return false;
-      const rs=r.franja*60,re=rs+r.duracion;
-      return s<re&&e>rs;
+      if(r.id===excl||r.consultorio!==cons||r.fecha!==fecha)return false;
+      const rs=r.franja*60,re=rs+r.duracion;return s<re&&e>rs;
     });
   };
 
-  const getReserva=(consultorio,fecha,franja)=>reservas.find(r=>{
-    if(r.consultorio!==consultorio||r.fecha!==fecha) return false;
-    const rs=r.franja*60,re=rs+r.duracion;
-    return franja*60>=rs&&franja*60<re;
+  const isBlocked=(cons,fecha,franja)=>{
+    const fechaDate=new Date(fecha);const diaSemana=fechaDate.getDay();
+    return bloqueos.some(b=>{
+      if(b.consultorio!==cons)return false;
+      const mismaFecha=b.fecha===fecha;
+      const mismoDia=b.repeticion==="semanal"&&new Date(b.fecha).getDay()===diaSemana;
+      if(!mismaFecha&&!mismoDia)return false;
+      const bs=b.franja*60,be=bs+b.duracion;
+      return franja*60>=bs&&franja*60<be;
+    });
+  };
+
+  const getBloqueoAt=(cons,fecha,franja)=>{
+    const fechaDate=new Date(fecha);const diaSemana=fechaDate.getDay();
+    return bloqueos.find(b=>{
+      if(b.consultorio!==cons)return false;
+      const mismaFecha=b.fecha===fecha;
+      const mismoDia=b.repeticion==="semanal"&&new Date(b.fecha).getDay()===diaSemana;
+      if(!mismaFecha&&!mismoDia)return false;
+      const bs=b.franja*60,be=bs+b.duracion;
+      return franja*60>=bs&&franja*60<be;
+    });
+  };
+
+  const getReserva=(cons,fecha,franja)=>reservas.find(r=>{
+    if(r.consultorio!==cons||r.fecha!==fecha)return false;
+    const rs=r.franja*60,re=rs+r.duracion;return franja*60>=rs&&franja*60<re;
   });
 
+  // CRUD reservas
   const handleSave=async()=>{
     const dur=parseInt(form.duracion);
     if(hasConflict(modal.consultorio,modal.fecha,modal.franja,dur)){setConflict(true);return;}
     const targetUserId=(isAdmin&&form.profesionalId)?form.profesionalId:currentUser.id;
     setLoading(true);
     try{
-      const data=await api({action:"crearReserva",token,consultorio:modal.consultorio,fecha:modal.fecha,franja:modal.franja,duracion:dur,nota:form.nota,targetUserId});
-      if(data.ok){await fetchReservas(token);setModal(null);showToast("Reserva creada");}
-      else setError(data.error);
+      const d=await api({action:"crearReserva",token,consultorio:modal.consultorio,fecha:modal.fecha,franja:modal.franja,duracion:dur,nota:form.nota,targetUserId});
+      if(d.ok){await fetchAll(token);setModal(null);showToast("Reserva creada");}else setError(d.error);
     }catch{setError("Error al guardar.");}
     setLoading(false);
   };
@@ -173,9 +173,8 @@ function App(){
     if(hasConflict(modal.consultorio,modal.fecha,modal.franja,dur,modal.reserva.id)){setConflict(true);return;}
     setLoading(true);
     try{
-      const data=await api({action:"editarReserva",token,id:modal.reserva.id,duracion:dur,nota:form.nota});
-      if(data.ok){await fetchReservas(token);setModal(null);showToast("Reserva actualizada");}
-      else setError(data.error);
+      const d=await api({action:"editarReserva",token,id:modal.reserva.id,duracion:dur,nota:form.nota});
+      if(d.ok){await fetchAll(token);setModal(null);showToast("Reserva actualizada");}else setError(d.error);
     }catch{setError("Error al actualizar.");}
     setLoading(false);
   };
@@ -183,24 +182,80 @@ function App(){
   const handleDelete=async(id)=>{
     setLoading(true);
     try{
-      const data=await api({action:"eliminarReserva",token,id});
-      if(data.ok){await fetchReservas(token);setModal(null);showToast("Reserva cancelada","danger");}
-      else setError(data.error);
+      const d=await api({action:"eliminarReserva",token,id});
+      if(d.ok){await fetchAll(token);setModal(null);showToast("Reserva cancelada","danger");}else setError(d.error);
     }catch{setError("Error al cancelar.");}
     setLoading(false);
   };
 
-  const openModal=(consultorio,fecha,franja)=>{
-    const existing=getReserva(consultorio,fecha,franja);
+  // Drag & drop
+  const handleDragStart=(e,id)=>{setDragId(id);e.dataTransfer.effectAllowed="move";};
+  const handleDragOver=e=>{e.preventDefault();e.currentTarget.classList.add("drag-over");};
+  const handleDragLeave=e=>e.currentTarget.classList.remove("drag-over");
+  const handleDrop=async(e,cons,fecha,franja)=>{
+    e.preventDefault();e.currentTarget.classList.remove("drag-over");
+    if(!dragId)return;
+    const r=reservas.find(x=>x.id===dragId);
+    if(!r)return;
+    if(r.consultorio===cons&&r.fecha===fecha&&r.franja===franja)return;
+    setLoading(true);
+    try{
+      const d=await api({action:"moverReserva",token,id:dragId,consultorio:cons,fecha,franja});
+      if(d.ok){await fetchAll(token);showToast("Reserva movida");}else{setError(d.error);}
+    }catch{setError("Error al mover.");}
+    setDragId(null);setLoading(false);
+  };
+
+  // Bloqueos
+  const handleCrearBloqueo=async()=>{
+    setLoading(true);
+    try{
+      const d=await api({action:"crearBloqueo",token,consultorio:bloqueoModal.consultorio,fecha:bloqueoModal.fecha,franja:bloqueoModal.franja,duracion:bloqueoForm.duracion,nota:bloqueoForm.nota,repeticion:bloqueoForm.repeticion});
+      if(d.ok){await fetchAll(token);setBloqueoModal(null);showToast("Bloqueo creado");}else setError(d.error);
+    }catch{setError("Error al bloquear.");}
+    setLoading(false);
+  };
+
+  const handleEliminarBloqueo=async(id)=>{
+    setLoading(true);
+    try{
+      const d=await api({action:"eliminarBloqueo",token,id});
+      if(d.ok){await fetchAll(token);setBloqueoModal(null);showToast("Bloqueo eliminado","danger");}else setError(d.error);
+    }catch{setError("Error al eliminar bloqueo.");}
+    setLoading(false);
+  };
+
+  const handleGenerarPreestablecidas=async()=>{
+    setLoading(true);
+    try{
+      const d=await api({action:"generarPreestablecidas",token});
+      if(d.ok){await fetchAll(token);showToast(`${d.creadas} reservas preestablecidas generadas`);}else setError(d.error);
+    }catch{setError("Error al generar.");}
+    setLoading(false);
+  };
+
+  const openModal=(cons,fecha,franja)=>{
+    const bloqueo=getBloqueoAt(cons,fecha,franja);
+    if(bloqueo){
+      if(isAdmin) setBloqueoModal({mode:"view",bloqueo,consultorio:cons,fecha,franja});
+      return;
+    }
+    const existing=getReserva(cons,fecha,franja);
     if(existing){
       const canEdit=isAdmin||currentUser.id===existing.userId;
-      setModal({mode:"view",reserva:existing,canEdit,consultorio,fecha,franja});
+      setModal({mode:"view",reserva:existing,canEdit,consultorio:cons,fecha,franja});
       setForm({nota:existing.nota,duracion:String(existing.duracion),profesionalId:""});
     } else {
-      if(isSocio&&!isAdmin) return;
-      setModal({mode:"nueva",consultorio,fecha,franja});
+      if(isBlocked(cons,fecha,franja))return;
+      if(isSocio&&!isAdmin)return;
+      setModal({mode:"nueva",consultorio:cons,fecha,franja});
       setForm({nota:"",duracion:"60",profesionalId:""});setConflict(false);
     }
+  };
+
+  const openBloqueoNuevo=(cons,fecha,franja)=>{
+    setBloqueoModal({mode:"nuevo",consultorio:cons,fecha,franja});
+    setBloqueoForm({nota:"",duracion:"60",repeticion:"ninguna"});
   };
 
   const s={
@@ -210,14 +265,11 @@ function App(){
   };
 
   // ── LOGIN ──────────────────────────────────────────────────
-  if(screen==="login") return(
+  if(screen==="login")return(
     <div style={{maxWidth:360,margin:"3rem auto",...s.card}}>
       <div style={{display:"flex",alignItems:"center",gap:10,marginBottom:20}}>
         <div style={{width:36,height:36,border:"2.5px solid var(--cyan)",borderRadius:8,transform:"rotate(45deg)",flexShrink:0}}></div>
-        <div>
-          <div style={{fontWeight:700,fontSize:20,color:"var(--navy)"}}>Psiquilibrium</div>
-          <div style={{fontSize:11,color:"var(--cyan)"}}>Centro de Bienestar Integral</div>
-        </div>
+        <div><div style={{fontWeight:700,fontSize:20,color:"var(--navy)"}}>Psiquilibrium</div><div style={{fontSize:11,color:"var(--cyan)"}}>Centro de Bienestar Integral</div></div>
       </div>
       <label style={s.label}>Usuario</label>
       <input value={loginForm.userId} onChange={e=>setLoginForm(f=>({...f,userId:e.target.value}))} placeholder="tu ID de usuario" style={{marginBottom:12}} onKeyDown={e=>e.key==="Enter"&&handleLogin()}/>
@@ -233,70 +285,43 @@ function App(){
   const todasReservas=[...reservas].sort((a,b)=>a.fecha.localeCompare(b.fecha)||a.franja-b.franja);
   const profesionales=allUsers.filter(u=>u.rol==="profesional");
 
-  // Tabla de calendario reutilizable
-  const CalTable=({consultorioIdx,compact=false})=>{
-    const franjaCount=10; // máx filas (lun-vie: 10, sáb: 4 — se ocultan las extras)
+  // Celda reutilizable
+  const Celda=({cons,fecha,fi,isSat,compact=false})=>{
+    if(isSat&&fi>=4)return <td style={{background:"#eef3f6",borderBottom:"1px solid var(--border)",borderLeft:"1px solid var(--border)"}}></td>;
+    const blocked=isBlocked(cons,fecha,fi);
+    const bloqueo=getBloqueoAt(cons,fecha,fi);
+    const isBloqueoStart=bloqueo&&bloqueo.franja===fi;
+    const r=!blocked?getReserva(cons,fecha,fi):null;
+    const isStart=r&&r.franja===fi;
+    const color=r?getUserColor(r.userId):null;
+    const usuario=r?allUsers.find(u=>u.id===r.userId):null;
+    const canDrag=r&&(isAdmin||currentUser.id===r.userId);
+
     return(
-      <table style={{width:"100%",borderCollapse:"collapse",tableLayout:"fixed",fontSize:compact?11:12}}>
-        <thead>
-          <tr>
-            <th style={{width:compact?52:70,padding:"5px 4px",color:"var(--text-muted)",fontWeight:400,textAlign:"left",borderBottom:"1px solid var(--border)"}}>Hora</th>
-            {weekDates.map((d,i)=>{
-              const isToday=dateKey(d)===dateKey(new Date());
-              return(
-                <th key={i} style={{padding:"5px 2px",fontWeight:isToday?600:400,color:isToday?"var(--white)":"var(--text-muted)",textAlign:"center",borderBottom:"1px solid var(--border)",background:isToday?"var(--navy)":"transparent",fontSize:compact?10:12}}>
-                  {DIAS[i]}{compact?"":""}<br/><span style={{fontSize:compact?9:11}}>{fmt(d)}</span>
-                </th>
-              );
-            })}
-          </tr>
-        </thead>
-        <tbody>
-          {FRANJAS_SEMANA.map((franja,fi)=>(
-            <tr key={fi}>
-              <td style={{padding:"2px 4px",color:"var(--text-muted)",fontSize:compact?9:11,borderBottom:"1px solid var(--border)",whiteSpace:"nowrap"}}>{franja.split(" – ")[0]}</td>
-              {weekDates.map((d,di)=>{
-                const fecha=dateKey(d);
-                const isSat=di===5;
-                // Sábado solo hasta las 12 (franjas 0-3)
-                if(isSat&&fi>=4) return <td key={di} style={{background:"#f5f5f5",borderBottom:"1px solid var(--border)"}}></td>;
-                const r=getReserva(consultorioIdx,fecha,fi);
-                const isStart=r&&r.franja===fi;
-                const color=r?getUserColor(r.userId):null;
-                const usuario=r?allUsers.find(u=>u.id===r.userId):null;
-                return(
-                  <td key={di} onClick={()=>openModal(consultorioIdx,fecha,fi)}
-                    style={{padding:"2px 2px",height:compact?24:30,borderBottom:"1px solid var(--border)",
-                      cursor:isSocio&&!isAdmin&&!r?"default":"pointer",
-                      background:r?color+"18":"transparent",
-                      borderLeft:r?`3px solid ${color}`:"3px solid transparent",
-                      verticalAlign:"middle"}}>
-                    {isStart&&(
-                      <div style={{fontSize:compact?8:10,color:"var(--navy)",fontWeight:600,overflow:"hidden",whiteSpace:"nowrap",textOverflow:"ellipsis"}}>
-                        {usuario?.nombre.split(" ").slice(-1)[0]||r.userId}
-                        {r.nota&&!compact?` · ${r.nota.slice(0,12)}`:""}
-                      </div>
-                    )}
-                  </td>
-                );
-              })}
-            </tr>
-          ))}
-        </tbody>
-      </table>
+      <td
+        onClick={()=>openModal(cons,fecha,fi)}
+        draggable={!!canDrag}
+        onDragStart={canDrag?e=>handleDragStart(e,r.id):undefined}
+        onDragOver={handleDragOver}
+        onDragLeave={handleDragLeave}
+        onDrop={e=>handleDrop(e,cons,fecha,fi)}
+        style={{
+          padding:"2px 3px",height:compact?22:28,
+          borderBottom:"1px solid var(--border)",borderLeft:"1px solid var(--border)",
+          cursor:blocked?"not-allowed":canDrag?"grab":"pointer",
+          background:blocked?"var(--blocked)":r?color+"18":"transparent",
+          borderTop:isStart?`2px solid ${color}`:isBloqueoStart?"2px solid var(--blocked-border)":"none",
+          verticalAlign:"middle",userSelect:"none"
+        }}>
+        {isStart&&<div style={{fontSize:compact?8:10,color:"var(--navy)",fontWeight:600,overflow:"hidden",whiteSpace:"nowrap",textOverflow:"ellipsis"}}>{usuario?.nombre.split(" ").slice(-1)[0]||r.userId}{!compact&&r.nota?` · ${r.nota.slice(0,12)}`:""}</div>}
+        {isBloqueoStart&&!r&&<div style={{fontSize:compact?7:9,color:"#8a6500",fontWeight:600,overflow:"hidden",whiteSpace:"nowrap",textOverflow:"ellipsis"}}>🔒{bloqueo.nota?` ${bloqueo.nota.slice(0,10)}`:""}</div>}
+      </td>
     );
   };
 
   return(
     <div style={{paddingBottom:"2rem"}}>
-      {toast&&(
-        <div style={{position:"fixed",top:16,right:16,zIndex:999,padding:"10px 18px",borderRadius:8,
-          background:toast.type==="danger"?"var(--danger-bg)":"var(--success-bg)",
-          color:toast.type==="danger"?"var(--danger)":"var(--success)",
-          fontSize:13,border:`1px solid ${toast.type==="danger"?"#f5c6c0":"#9fe1cb"}`}}>
-          {toast.msg}
-        </div>
-      )}
+      {toast&&<div style={{position:"fixed",top:16,right:16,zIndex:999,padding:"10px 18px",borderRadius:8,background:toast.type==="danger"?"var(--danger-bg)":"var(--success-bg)",color:toast.type==="danger"?"var(--danger)":"var(--success)",fontSize:13,border:`1px solid ${toast.type==="danger"?"#f5c6c0":"#9fe1cb"}`}}>{toast.msg}</div>}
 
       {/* HEADER */}
       <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:16,flexWrap:"wrap",gap:8,paddingTop:"0.5rem"}}>
@@ -307,18 +332,17 @@ function App(){
         </div>
         <div style={{display:"flex",gap:6,flexWrap:"wrap"}}>
           {["todos","semana","mis reservas",...(isSocio?["todas"]:[])].map(v=>(
-            <button key={v} onClick={()=>setView(v)} style={{fontSize:12,background:view===v?"var(--navy)":"transparent",color:view===v?"#fff":"var(--navy)",border:`1px solid ${view===v?"var(--navy)":"var(--border)"}`}}>
-              {v.charAt(0).toUpperCase()+v.slice(1)}
-            </button>
+            <button key={v} onClick={()=>setView(v)} style={{fontSize:12,background:view===v?"var(--navy)":"transparent",color:view===v?"#fff":"var(--navy)",border:`1px solid ${view===v?"var(--navy)":"var(--border)"}`}}>{v.charAt(0).toUpperCase()+v.slice(1)}</button>
           ))}
-          <button onClick={()=>fetchReservas(token)} style={{fontSize:12,color:"var(--text-muted)"}} title="Actualizar">↺</button>
-          <button onClick={()=>{clearSession();setScreen("login");setCurrentUser(null);setToken(null);}} style={{fontSize:12,color:"var(--text-muted)"}}>Salir</button>
+          <button onClick={()=>fetchAll(token)} style={{fontSize:12,color:"var(--text-muted)"}} title="Actualizar">↺</button>
+          {isAdmin&&<button onClick={handleGenerarPreestablecidas} style={{fontSize:12,background:"var(--cyan-light)",color:"var(--navy)"}}>⚡ Generar fijas</button>}
+          <button onClick={()=>{sessionStorage.removeItem(SESSION_KEY);setScreen("login");setCurrentUser(null);setToken(null);}} style={{fontSize:12,color:"var(--text-muted)"}}>Salir</button>
         </div>
       </div>
 
       {error&&<div style={{fontSize:12,color:"var(--danger)",marginBottom:8,padding:"8px 12px",background:"var(--danger-bg)",borderRadius:8}}>{error}<button onClick={()=>setError(null)} style={{fontSize:11,marginLeft:8}}>✕</button></div>}
 
-      {/* NAVEGACIÓN SEMANA — compartida entre "todos" y "semana" */}
+      {/* NAV SEMANA */}
       {(view==="todos"||view==="semana")&&(
         <div style={{display:"flex",alignItems:"center",gap:8,marginBottom:12,flexWrap:"wrap"}}>
           <button onClick={()=>{const d=new Date(weekBase);d.setDate(d.getDate()-7);setWeekBase(d);}}>← Anterior</button>
@@ -328,92 +352,79 @@ function App(){
         </div>
       )}
 
-      {/* VISTA: TODOS LOS CONSULTORIOS EN PARALELO */}
+      {/* VISTA TODOS */}
       {view==="todos"&&(
         <div style={{overflowX:"auto"}}>
-          {/* Cabecera de días compartida */}
-          <table style={{width:"100%",borderCollapse:"collapse",tableLayout:"fixed",fontSize:12,marginBottom:2}}>
+          <table style={{width:"100%",borderCollapse:"collapse",tableLayout:"fixed",fontSize:12,marginBottom:4}}>
             <thead>
               <tr>
-                <th style={{width:52,borderBottom:"2px solid var(--border)"}}></th>
+                <th style={{width:80,borderBottom:"2px solid var(--border)",background:"var(--cyan-light)"}}></th>
                 {weekDates.map((d,i)=>{
                   const isToday=dateKey(d)===dateKey(new Date());
-                  return(
-                    <th key={i} style={{padding:"6px 2px",fontWeight:isToday?700:500,color:isToday?"var(--white)":"var(--navy)",textAlign:"center",borderBottom:"2px solid var(--border)",background:isToday?"var(--navy)":"var(--cyan-light)",fontSize:12}}>
-                      {DIAS[i]}<br/><span style={{fontSize:10,fontWeight:400}}>{fmt(d)}</span>
-                    </th>
-                  );
+                  return<th key={i} style={{padding:"6px 2px",fontWeight:isToday?700:500,color:isToday?"var(--white)":"var(--navy)",textAlign:"center",borderBottom:"2px solid var(--border)",background:isToday?"var(--navy)":"var(--cyan-light)",fontSize:12,borderLeft:"1px solid var(--border)"}}>
+                    {DIAS[i]}<br/><span style={{fontSize:10,fontWeight:400}}>{fmt(d)}</span>
+                  </th>;
                 })}
               </tr>
             </thead>
           </table>
-          {/* Un bloque por consultorio */}
           {CONSULTORIOS.map((consNombre,ci)=>(
-            <div key={ci} style={{marginBottom:4}}>
-              <table style={{width:"100%",borderCollapse:"collapse",tableLayout:"fixed",fontSize:11}}>
-                <tbody>
-                  {FRANJAS_SEMANA.map((franja,fi)=>(
-                    <tr key={fi}>
-                      {fi===0?(
-                        <td rowSpan={FRANJAS_SEMANA.length} style={{width:52,verticalAlign:"middle",textAlign:"center",background:"var(--cyan-light)",borderRight:"1px solid var(--border)",fontSize:9,fontWeight:700,color:"var(--navy)",padding:"2px",writingMode:"vertical-rl",transform:"rotate(180deg)",letterSpacing:1}}>
-                          {consNombre}
-                        </td>
-                      ):null}
-                      {weekDates.map((d,di)=>{
-                        const fecha=dateKey(d);
-                        const isSat=di===5;
-                        if(isSat&&fi>=4) return fi===0?<td key={di} rowSpan={6} style={{background:"#eef3f6",borderLeft:"1px solid var(--border)",borderBottom:"1px solid var(--border)"}}></td>:null;
-                        const r=getReserva(ci,fecha,fi);
-                        const isStart=r&&r.franja===fi;
-                        const color=r?getUserColor(r.userId):null;
-                        const usuario=r?allUsers.find(u=>u.id===r.userId):null;
-                        return(
-                          <td key={di} onClick={()=>openModal(ci,fecha,fi)}
-                            style={{padding:"1px 2px",height:22,
-                              borderBottom:`1px solid ${fi===FRANJAS_SEMANA.length-1?"var(--navy)":"var(--border)"}`,
-                              borderLeft:"1px solid var(--border)",
-                              cursor:isSocio&&!isAdmin&&!r?"default":"pointer",
-                              background:r?color+"20":"transparent",
-                              borderTop:isStart&&r?`2px solid ${color}`:"none",
-                              verticalAlign:"middle"}}>
-                            {isStart&&(
-                              <div style={{fontSize:8,color:"var(--navy)",fontWeight:700,overflow:"hidden",whiteSpace:"nowrap",textOverflow:"ellipsis",paddingLeft:2}}>
-                                {usuario?.nombre.split(" ").slice(-1)[0]||r.userId}
-                              </div>
-                            )}
-                            {fi===0&&!r&&(
-                              <div style={{fontSize:8,color:"var(--text-muted)",paddingLeft:2}}>{franja.split(" – ")[0]}</div>
-                            )}
-                          </td>
-                        );
-                      })}
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
+            <table key={ci} style={{width:"100%",borderCollapse:"collapse",tableLayout:"fixed",fontSize:11,marginBottom:2}}>
+              <tbody>
+                {ALL_FRANJAS.map((hora,fi)=>(
+                  <tr key={fi}>
+                    <td style={{width:80,padding:"1px 4px",fontSize:9,color:"var(--text-muted)",borderBottom:"1px solid var(--border)",whiteSpace:"nowrap",verticalAlign:"middle",background:"var(--cyan-light)"}}>
+                      {fi===0?<strong style={{fontSize:10,color:"var(--navy)"}}>{consNombre}</strong>:""}<br/>{hora}
+                    </td>
+                    {weekDates.map((d,di)=>(
+                      <Celda key={di} cons={ci} fecha={dateKey(d)} fi={fi} isSat={di===5} compact={true}/>
+                    ))}
+                  </tr>
+                ))}
+              </tbody>
+            </table>
           ))}
-          {/* Leyenda */}
           <div style={{marginTop:12,display:"flex",gap:12,flexWrap:"wrap"}}>
             {allUsers.map((u,i)=>(
               <div key={u.id} style={{display:"flex",alignItems:"center",gap:5,fontSize:11,color:"var(--text-muted)"}}>
                 <span style={{width:10,height:10,borderRadius:2,background:COLORS[i%COLORS.length],display:"inline-block"}}></span>{u.nombre}
               </div>
             ))}
+            <div style={{display:"flex",alignItems:"center",gap:5,fontSize:11,color:"var(--text-muted)"}}>
+              <span style={{width:10,height:10,borderRadius:2,background:"var(--blocked-border)",display:"inline-block"}}></span>Bloqueado
+            </div>
           </div>
         </div>
       )}
 
-      {/* VISTA: SEMANA — UN CONSULTORIO */}
+      {/* VISTA SEMANA */}
       {view==="semana"&&(
         <>
-          <div style={{display:"flex",gap:6,marginBottom:10,flexWrap:"wrap"}}>
+          <div style={{display:"flex",gap:6,marginBottom:10,flexWrap:"wrap",alignItems:"center"}}>
             {CONSULTORIOS.map((c,i)=>(
               <button key={i} onClick={()=>setSelCons(i)} style={{fontSize:12,background:selCons===i?"var(--navy)":"transparent",color:selCons===i?"#fff":"var(--navy)",border:`1px solid ${selCons===i?"var(--navy)":"var(--border)"}`}}>{c}</button>
             ))}
+            {isAdmin&&<button onClick={()=>openBloqueoNuevo(selCons,dateKey(weekDates[0]),0)} style={{fontSize:12,background:"var(--blocked)",color:"#8a6500",border:"1px solid var(--blocked-border)",marginLeft:"auto"}}>🔒 Crear bloqueo</button>}
           </div>
           <div style={{overflowX:"auto"}}>
-            <CalTable consultorioIdx={selCons}/>
+            <table style={{width:"100%",borderCollapse:"collapse",tableLayout:"fixed",fontSize:12}}>
+              <thead>
+                <tr>
+                  <th style={{width:70,padding:"5px 4px",color:"var(--text-muted)",fontWeight:400,textAlign:"left",borderBottom:"1px solid var(--border)"}}>Hora</th>
+                  {weekDates.map((d,i)=>{const isToday=dateKey(d)===dateKey(new Date());return<th key={i} style={{padding:"5px 2px",fontWeight:isToday?700:400,color:isToday?"var(--white)":"var(--text-muted)",textAlign:"center",borderBottom:"1px solid var(--border)",background:isToday?"var(--navy)":"transparent"}}>{DIAS[i]}<br/><span style={{fontSize:10}}>{fmt(d)}</span></th>;})}
+                </tr>
+              </thead>
+              <tbody>
+                {ALL_FRANJAS.map((hora,fi)=>(
+                  <tr key={fi}>
+                    <td style={{padding:"3px 4px",color:"var(--text-muted)",fontSize:11,borderBottom:"1px solid var(--border)",whiteSpace:"nowrap"}}>{hora}</td>
+                    {weekDates.map((d,di)=>(
+                      <Celda key={di} cons={selCons} fecha={dateKey(d)} fi={fi} isSat={di===5} compact={false}/>
+                    ))}
+                  </tr>
+                ))}
+              </tbody>
+            </table>
           </div>
           <div style={{marginTop:12,display:"flex",gap:12,flexWrap:"wrap"}}>
             {allUsers.map((u,i)=>(
@@ -425,7 +436,7 @@ function App(){
         </>
       )}
 
-      {/* VISTA: MIS RESERVAS */}
+      {/* VISTA MIS RESERVAS */}
       {view==="mis reservas"&&(
         <div>
           <div style={{fontWeight:600,marginBottom:12,fontSize:14,color:"var(--navy)"}}>Mis reservas</div>
@@ -433,8 +444,8 @@ function App(){
           {misReservas.map(r=>(
             <div key={r.id} style={{...s.card,marginBottom:8,display:"flex",justifyContent:"space-between",alignItems:"center",borderLeft:`3px solid ${getUserColor(r.userId)}`}}>
               <div>
-                <div style={{fontWeight:600,fontSize:13,color:"var(--navy)"}}>{CONSULTORIOS[r.consultorio]} · {FRANJAS_SEMANA[r.franja]?.split(" – ")[0]}</div>
-                <div style={s.muted}>{r.fecha} · {r.duracion} min{r.nota?` · ${r.nota}`:""}</div>
+                <div style={{fontWeight:600,fontSize:13,color:"var(--navy)"}}>{CONSULTORIOS[r.consultorio]} · {ALL_FRANJAS[r.franja]}</div>
+                <div style={s.muted}>{r.fecha} · {r.duracion} min{r.nota?` · ${r.nota}`:""}{r.tipo==="preestablecida"?" · (reserva fija)":""}</div>
               </div>
               <button onClick={()=>handleDelete(r.id)} style={{fontSize:11,color:"var(--danger)",background:"var(--danger-bg)",border:"1px solid #f5c6c0",flexShrink:0}}>Cancelar</button>
             </div>
@@ -442,18 +453,17 @@ function App(){
         </div>
       )}
 
-      {/* VISTA: TODAS — solo admin/socio */}
+      {/* VISTA TODAS */}
       {view==="todas"&&isSocio&&(
         <div>
           <div style={{fontWeight:600,marginBottom:12,fontSize:14,color:"var(--navy)"}}>Todas las reservas ({todasReservas.length})</div>
           {todasReservas.map(r=>{
-            const u=allUsers.find(x=>x.id===r.userId);
-            const color=getUserColor(r.userId);
+            const u=allUsers.find(x=>x.id===r.userId);const color=getUserColor(r.userId);
             return(
               <div key={r.id} style={{...s.card,borderLeft:`3px solid ${color}`,marginBottom:8,display:"flex",justifyContent:"space-between",alignItems:"center"}}>
                 <div>
-                  <div style={{fontWeight:600,fontSize:13,color:"var(--navy)"}}>{CONSULTORIOS[r.consultorio]} · {FRANJAS_SEMANA[r.franja]?.split(" – ")[0]}</div>
-                  <div style={s.muted}>{r.fecha} · {u?.nombre||r.userId} · {r.duracion} min{r.nota?` · ${r.nota}`:""}</div>
+                  <div style={{fontWeight:600,fontSize:13,color:"var(--navy)"}}>{CONSULTORIOS[r.consultorio]} · {ALL_FRANJAS[r.franja]}</div>
+                  <div style={s.muted}>{r.fecha} · {u?.nombre||r.userId} · {r.duracion} min{r.nota?` · ${r.nota}`:""}{r.tipo==="preestablecida"?" · (fija)":""}</div>
                 </div>
                 {isAdmin&&<button onClick={()=>handleDelete(r.id)} style={{fontSize:11,color:"var(--danger)",background:"var(--danger-bg)",border:"1px solid #f5c6c0",flexShrink:0}}>Cancelar</button>}
               </div>
@@ -462,30 +472,30 @@ function App(){
         </div>
       )}
 
-      {/* MODAL */}
+      {/* MODAL RESERVA */}
       {modal&&(
         <div style={{position:"fixed",inset:0,background:"rgba(0,0,0,0.35)",display:"flex",alignItems:"center",justifyContent:"center",zIndex:100,padding:16}}>
           <div style={{...s.card,width:"100%",maxWidth:400}}>
             {modal.mode==="nueva"&&(
               <>
                 <div style={{fontWeight:600,fontSize:15,marginBottom:4,color:"var(--navy)"}}>Nueva reserva</div>
-                <div style={{...s.muted,marginBottom:16}}>{CONSULTORIOS[modal.consultorio]} · {DIAS_FULL[weekDates.findIndex(d=>dateKey(d)===modal.fecha)]||""} {modal.fecha} · {FRANJAS_SEMANA[modal.franja]}</div>
+                <div style={{...s.muted,marginBottom:16}}>{CONSULTORIOS[modal.consultorio]} · {DIAS_FULL[weekDates.findIndex(d=>dateKey(d)===modal.fecha)]||modal.fecha} · {ALL_FRANJAS[modal.franja]}</div>
                 {isAdmin&&(
                   <>
                     <label style={s.label}>Profesional</label>
                     <select value={form.profesionalId} onChange={e=>setForm(f=>({...f,profesionalId:e.target.value}))} style={{marginBottom:12}}>
-                      <option value="">— Seleccionar profesional —</option>
+                      <option value="">— Seleccionar —</option>
                       {profesionales.map(u=><option key={u.id} value={u.id}>{u.nombre}</option>)}
                     </select>
                   </>
                 )}
                 <label style={s.label}>Duración</label>
                 <select value={form.duracion} onChange={e=>{setForm(f=>({...f,duracion:e.target.value}));setConflict(false);}} style={{marginBottom:12}}>
-                  {DURACIONES.map(d=><option key={d.val} value={d.val}>{d.label}</option>)}
+                  {DURACIONES.map(d=><option key={d.v} value={d.v}>{d.l}</option>)}
                 </select>
-                <label style={s.label}>Nota libre (opcional)</label>
-                <input value={form.nota} onChange={e=>setForm(f=>({...f,nota:e.target.value}))} placeholder="Ej: nombre paciente, tipo de consulta..." style={{marginBottom:16}}/>
-                {conflict&&<div style={{fontSize:12,color:"var(--danger)",marginBottom:8}}>Conflicto con otra reserva en ese horario.</div>}
+                <label style={s.label}>Nota (opcional)</label>
+                <input value={form.nota} onChange={e=>setForm(f=>({...f,nota:e.target.value}))} placeholder="Nombre paciente, tipo de consulta..." style={{marginBottom:16}}/>
+                {conflict&&<div style={{fontSize:12,color:"var(--danger)",marginBottom:8}}>Conflicto de horario.</div>}
                 <div style={{display:"flex",gap:8,justifyContent:"flex-end"}}>
                   <button onClick={()=>setModal(null)} style={{color:"var(--text-muted)"}}>Cancelar</button>
                   <button onClick={handleSave} disabled={loading||(isAdmin&&!form.profesionalId)} style={{background:"var(--navy)",color:"#fff",border:"none"}}>Reservar</button>
@@ -495,13 +505,14 @@ function App(){
             {modal.mode==="view"&&(
               <>
                 <div style={{fontWeight:600,fontSize:15,marginBottom:4,color:"var(--navy)"}}>Reserva</div>
-                <div style={{...s.muted,marginBottom:12}}>{CONSULTORIOS[modal.reserva.consultorio]} · {modal.reserva.fecha} · {FRANJAS_SEMANA[modal.reserva.franja]}</div>
-                <div style={{fontSize:13,marginBottom:8}}><span style={{color:"var(--text-muted)"}}>Profesional: </span>{allUsers.find(u=>u.id===modal.reserva.userId)?.nombre||modal.reserva.userId}</div>
+                <div style={{...s.muted,marginBottom:12}}>{CONSULTORIOS[modal.reserva.consultorio]} · {modal.reserva.fecha} · {ALL_FRANJAS[modal.reserva.franja]}</div>
+                <div style={{fontSize:13,marginBottom:4}}><span style={{color:"var(--text-muted)"}}>Profesional: </span>{allUsers.find(u=>u.id===modal.reserva.userId)?.nombre||modal.reserva.userId}</div>
+                {modal.reserva.tipo==="preestablecida"&&<div style={{fontSize:12,background:"var(--cyan-light)",color:"var(--navy)",padding:"4px 8px",borderRadius:6,marginBottom:8,display:"inline-block"}}>Reserva fija</div>}
                 {modal.canEdit?(
                   <>
                     <label style={{...s.label,marginTop:8}}>Duración</label>
                     <select value={form.duracion} onChange={e=>{setForm(f=>({...f,duracion:e.target.value}));setConflict(false);}} style={{marginBottom:10}}>
-                      {DURACIONES.map(d=><option key={d.val} value={d.val}>{d.label}</option>)}
+                      {DURACIONES.map(d=><option key={d.v} value={d.v}>{d.l}</option>)}
                     </select>
                     <label style={s.label}>Nota</label>
                     <input value={form.nota} onChange={e=>setForm(f=>({...f,nota:e.target.value}))} style={{marginBottom:12}}/>
@@ -518,6 +529,58 @@ function App(){
                     <div style={{display:"flex",justifyContent:"flex-end"}}><button onClick={()=>setModal(null)}>Cerrar</button></div>
                   </>
                 )}
+              </>
+            )}
+          </div>
+        </div>
+      )}
+
+      {/* MODAL BLOQUEO */}
+      {bloqueoModal&&(
+        <div style={{position:"fixed",inset:0,background:"rgba(0,0,0,0.35)",display:"flex",alignItems:"center",justifyContent:"center",zIndex:100,padding:16}}>
+          <div style={{...s.card,width:"100%",maxWidth:400,borderTop:"3px solid var(--blocked-border)"}}>
+            {bloqueoModal.mode==="nuevo"&&(
+              <>
+                <div style={{fontWeight:600,fontSize:15,marginBottom:4,color:"var(--navy)"}}>🔒 Nuevo bloqueo</div>
+                <div style={{...s.muted,marginBottom:16}}>{CONSULTORIOS[bloqueoModal.consultorio]}</div>
+                <label style={s.label}>Consultorio</label>
+                <select value={bloqueoModal.consultorio} onChange={e=>setBloqueoModal(m=>({...m,consultorio:Number(e.target.value)}))} style={{marginBottom:12}}>
+                  {CONSULTORIOS.map((c,i)=><option key={i} value={i}>{c}</option>)}
+                </select>
+                <label style={s.label}>Fecha</label>
+                <input type="date" value={bloqueoModal.fecha} onChange={e=>setBloqueoModal(m=>({...m,fecha:e.target.value}))} style={{marginBottom:12}}/>
+                <label style={s.label}>Franja de inicio</label>
+                <select value={bloqueoModal.franja} onChange={e=>setBloqueoModal(m=>({...m,franja:Number(e.target.value)}))} style={{marginBottom:12}}>
+                  {ALL_FRANJAS.map((h,i)=><option key={i} value={i}>{h}</option>)}
+                </select>
+                <label style={s.label}>Duración</label>
+                <select value={bloqueoForm.duracion} onChange={e=>setBloqueoForm(f=>({...f,duracion:e.target.value}))} style={{marginBottom:12}}>
+                  {DURACIONES.map(d=><option key={d.v} value={d.v}>{d.l}</option>)}
+                </select>
+                <label style={s.label}>Repetición</label>
+                <select value={bloqueoForm.repeticion} onChange={e=>setBloqueoForm(f=>({...f,repeticion:e.target.value}))} style={{marginBottom:12}}>
+                  <option value="ninguna">Sin repetición</option>
+                  <option value="semanal">Semanal (mismo día cada semana)</option>
+                </select>
+                <label style={s.label}>Nota (opcional)</label>
+                <input value={bloqueoForm.nota} onChange={e=>setBloqueoForm(f=>({...f,nota:e.target.value}))} placeholder="Ej: Reunión de equipo, mantenimiento..." style={{marginBottom:16}}/>
+                <div style={{display:"flex",gap:8,justifyContent:"flex-end"}}>
+                  <button onClick={()=>setBloqueoModal(null)} style={{color:"var(--text-muted)"}}>Cancelar</button>
+                  <button onClick={handleCrearBloqueo} disabled={loading} style={{background:"#8a6500",color:"#fff",border:"none"}}>Bloquear</button>
+                </div>
+              </>
+            )}
+            {bloqueoModal.mode==="view"&&(
+              <>
+                <div style={{fontWeight:600,fontSize:15,marginBottom:4,color:"var(--navy)"}}>🔒 Bloqueo</div>
+                <div style={{...s.muted,marginBottom:12}}>{CONSULTORIOS[bloqueoModal.bloqueo.consultorio]} · {bloqueoModal.bloqueo.fecha} · {ALL_FRANJAS[bloqueoModal.bloqueo.franja]}</div>
+                <div style={{fontSize:13,marginBottom:4}}><span style={{color:"var(--text-muted)"}}>Duración: </span>{bloqueoModal.bloqueo.duracion} min</div>
+                <div style={{fontSize:13,marginBottom:4}}><span style={{color:"var(--text-muted)"}}>Repetición: </span>{bloqueoModal.bloqueo.repeticion==="semanal"?"Semanal":"Sin repetición"}</div>
+                <div style={{fontSize:13,marginBottom:16}}><span style={{color:"var(--text-muted)"}}>Nota: </span>{bloqueoModal.bloqueo.nota||"—"}</div>
+                <div style={{display:"flex",gap:8,justifyContent:"flex-end"}}>
+                  <button onClick={()=>handleEliminarBloqueo(bloqueoModal.bloqueo.id)} style={{color:"var(--danger)",background:"var(--danger-bg)",border:"1px solid #f5c6c0"}}>Eliminar bloqueo</button>
+                  <button onClick={()=>setBloqueoModal(null)} style={{color:"var(--text-muted)"}}>Cerrar</button>
+                </div>
               </>
             )}
           </div>
