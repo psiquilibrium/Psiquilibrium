@@ -46,12 +46,14 @@ function saveConfig(){}
 
 async function apiCall(url,params){
   const u=new URL(url);
-  Object.entries(params).forEach(([k,v])=>u.searchParams.set(k,typeof v==="object"?JSON.stringify(v):v));
-  const res=await fetch(u.toString());
+  Object.entries(params).forEach(([k,v])=>u.searchParams.set(k,typeof v==="object"?JSON.stringify(v):String(v)));
+  const res=await fetch(u.toString(),{redirect:"follow"});
   return res.json();
 }
 async function apiPost(url,body){
-  const res=await fetch(url,{method:"POST",body:JSON.stringify(body),headers:{"Content-Type":"application/json"}});
+  const u=new URL(url);
+  Object.entries(body).forEach(([k,v])=>u.searchParams.set(k,typeof v==="object"?JSON.stringify(v):String(v)));
+  const res=await fetch(u.toString(),{redirect:"follow"});
   return res.json();
 }
 
