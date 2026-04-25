@@ -153,24 +153,27 @@ function App(){
     const dur=(ff-fi)*30;
     if(hasConflictLocal(modal.consultorio,modal.fecha,fi,dur)){setConflict(true);return;}
     const targetUserId=(isAdmin&&form.profesionalId)?form.profesionalId:currentUser.id;
-    setLoading(true);
+    const tempId="temp_"+Date.now();
+    const nueva={id:tempId,consultorio:modal.consultorio,userId:targetUserId,fecha:modal.fecha,franja:fi,duracion:dur,nota:form.nota,tipo:"normal",estado:"confirmada"};
+    setReservas(prev=>[...prev,nueva]);
+    setModal(null);showToast("Reserva creada");
     try{
       const d=await api({action:"crearReserva",token,consultorio:modal.consultorio,fecha:modal.fecha,franja:fi,duracion:dur,nota:form.nota,targetUserId});
-      if(d.ok){await fetchAll(token);setModal(null);showToast("Reserva creada");}else setError(d.error);
-    }catch{setError("Error al guardar.");}
-    setLoading(false);
+      if(d.ok) fetchAll(token);
+      else{setError(d.error);setReservas(prev=>prev.filter(r=>r.id!==tempId));}
+    }catch{setError("Error al guardar.");setReservas(prev=>prev.filter(r=>r.id!==tempId));}
   };
   const handleUpdate=async()=>{
     const fi=Number(form.franjaInicio),ff=Number(form.franjaFin);
     if(ff<=fi){setConflict(true);return;}
     const dur=(ff-fi)*30;
     if(hasConflictLocal(modal.consultorio,modal.fecha,fi,dur,modal.reserva.id)){setConflict(true);return;}
-    setLoading(true);
+    setReservas(prev=>prev.map(r=>r.id===modal.reserva.id?{...r,duracion:dur,nota:form.nota}:r));
+    setModal(null);showToast("Reserva actualizada");
     try{
       const d=await api({action:"editarReserva",token,id:modal.reserva.id,duracion:dur,nota:form.nota});
-      if(d.ok){await fetchAll(token);setModal(null);showToast("Reserva actualizada");}else setError(d.error);
-    }catch{setError("Error al actualizar.");}
-    setLoading(false);
+      if(!d.ok){setError(d.error);fetchAll(token);}
+    }catch{setError("Error al actualizar.");fetchAll(token);}
   };
   const handleEstado=async(id,estado)=>{
     setLoading(true);
@@ -197,22 +200,30 @@ function App(){
   const onDrop=async(e,cons,fecha,fi)=>{
     e.preventDefault();e.currentTarget.classList.remove("drop-target","drop-target-blocked");
     if(!dragItem)return;
-    setLoading(true);
-    try{
-      if(dragItem.type==="reserva"){
+    if(dragItem.type==="reserva"){
+      const r=reservas.find(x=>x.id===dragItem.id);
+      if(!r||r.consultorio===cons&&r.fecha===fecha&&r.franja===fi){setDragItem(null);return;}
+      // Optimista
+      setReservas(prev=>prev.map(x=>x.id===dragItem.id?{...x,consultorio:cons,fecha,franja:fi}:x));
+      showToast("Reserva movida");
+      try{
         const d=await api({action:"moverReserva",token,id:dragItem.id,consultorio:cons,fecha,franja:fi});
-        if(d.ok){await fetchAll(token);showToast("Reserva movida");}else setError(d.error);
-      } else {
-        // mover bloqueo: eliminar + recrear
-        const b=bloqueos.find(x=>x.id===dragItem.id);
-        if(b){
+        if(!d.ok){setError(d.error);fetchAll(token);}
+      }catch{setError("Error al mover.");fetchAll(token);}
+    } else {
+      const b=bloqueos.find(x=>x.id===dragItem.id);
+      if(b){
+        setBloqueos(prev=>prev.map(x=>x.id===dragItem.id?{...x,consultorio:cons,fecha,franja:fi}:x));
+        showToast("Bloqueo movido");
+        try{
           await api({action:"eliminarBloqueo",token,id:b.id});
-          const d=await api({action:"crearBloqueo",token,consultorio:cons==="todos"?cons:cons,fecha,franja:fi,duracion:b.duracion,nota:b.nota,repeticion:b.repeticion});
-          if(d.ok){await fetchAll(token);showToast("Bloqueo movido");}else setError(d.error);
-        }
+          const d=await api({action:"crearBloqueo",token,consultorio:cons,fecha,franja:fi,duracion:b.duracion,nota:b.nota,repeticion:b.repeticion});
+          if(d.ok) fetchAll(token);
+          else{setError(d.error);fetchAll(token);}
+        }catch{setError("Error al mover bloqueo.");fetchAll(token);}
       }
-    }catch{setError("Error al mover.");}
-    setDragItem(null);setLoading(false);
+    }
+    setDragItem(null);
   };
 
   // Copiar/pegar
@@ -423,7 +434,7 @@ function App(){
                               background:blocked?"var(--blocked)":cancelled?"var(--cancelled)":r?color+"25":"transparent",
                               borderTop:isRS&&!cancelled?`2px solid ${color}`:isBS?"2px solid var(--blocked-border)":"none",
                               opacity:cancelled?0.65:1,verticalAlign:"middle",userSelect:"none"}}>
-                            {isRS&&<div style={{fontSize:7,color:cancelled?"#999":"var(--navy)",fontWeight:700,overflow:"hidden",whiteSpace:"nowrap",textOverflow:"ellipsis",textDecoration:cancelled?"line-through":"none",paddingLeft:1}}>{cancelled?"✗":""}{getUserName(r.userId)}</div>}
+                {isRS&&<div style={{fontSize:7,color:cancelled?"#999":"var(--navy)",fontWeight:700,overflow:"hidden",whiteSpace:"nowrap",textOverflow:"ellipsis",textDecoration:cancelled?"line-through":"none",paddingLeft:1}}>{cancelled?"✗":""}{getUserName(r.userId)}</div>}
                             {isBS&&!r&&<div style={{fontSize:7,color:"#8a6500"}}>🔒</div>}
                           </td>
                         );
@@ -621,7 +632,7 @@ function App(){
                 <input value={form.nota} onChange={e=>setForm(f=>({...f,nota:e.target.value}))} style={{marginBottom:12}}/>
                 {conflict&&<div style={{fontSize:12,color:"var(--danger)",marginBottom:8}}>Conflicto de horario.</div>}
                 <div style={{display:"flex",gap:6,justifyContent:"flex-end",flexWrap:"wrap"}}>
-                  {isAdmin&&<button onClick={()=>handleEstado(modal.reserva.id,"cancelada")} style={{fontSize:11,color:"var(--danger)",background:"var(--danger-bg)",border:"1px solid #f5c6c0"}}>✗ Cancelar</button>}
+                  {(isAdmin||currentUser.id===modal.reserva.userId)&&modal.reserva.estado!=="cancelada"&&<button onClick={()=>handleEstado(modal.reserva.id,"cancelada")} style={{fontSize:11,color:"var(--danger)",background:"var(--danger-bg)",border:"1px solid #f5c6c0"}}>✗ Cancelar</button>}
                   <button onClick={()=>handleCopy("reserva",modal.reserva)} style={{fontSize:11}}>📋 Copiar</button>
                   <button onClick={()=>setModal(null)} style={{color:"var(--muted)"}}>Cerrar</button>
                   <button onClick={handleUpdate} disabled={loading} style={{background:"var(--navy)",color:"#fff",border:"none"}}>Guardar</button>
