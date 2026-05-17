@@ -31,7 +31,7 @@ button:disabled{opacity:0.5;cursor:default;}
 <body>
 <div id="root"></div>
 <script type="text/babel">
-const{useState,useEffect,useCallback,useRef}=React;
+const{useState,useEffect,useCallback,useMemo,useRef}=React;
 
 const SCRIPT_URL="https://script.google.com/macros/s/AKfycbwtbD8VGPkhFg0nMuRW2uvIjLnLlVXclYvqRlyqgYpz_kKNLxSX2FrYCdmwW8mQhudv/exec";
 const CONS=["Consultorio 1","Consultorio 2","Consultorio 3","Consultorio 4"];
@@ -80,6 +80,8 @@ function App(){
   const [isMobile,setIsMobile]=useState(()=>window.innerWidth<=720);
   const [mobileDia,setMobileDia]=useState(()=>Math.min(Math.max((new Date().getDay()||1)-1,0),5));
   const pollRef=useRef(null);
+  const fetchInFlightKeyRef=useRef(null);
+  const latestFetchKeyRef=useRef(null);
 
   useEffect(()=>{
     const onResize=()=>setIsMobile(window.innerWidth<=720);
@@ -88,12 +90,54 @@ function App(){
   },[]);
 
   const weekDates=getWeekDates(weekBase);
+  const weekStart=dateKey(weekDates[0]);
+  const weekEnd=dateKey(weekDates[5]);
   const isAdmin=currentUser?.rol==="admin";
   const isSocio=currentUser?.rol==="socio"||isAdmin;
 
   const showToast=(msg,type="success")=>{setToast({msg,type});setTimeout(()=>setToast(null),3000);};
-  const getUserColor=uid=>{const i=allUsers.findIndex(u=>u.id===uid);return USER_COLORS[i>=0?i%USER_COLORS.length:0];};
-  const getUserName=uid=>{const u=allUsers.find(x=>x.id===uid);return u?.nombre||uid;};
+  const userMeta=useMemo(()=>{
+    const names=new Map(),colors=new Map();
+    allUsers.forEach((u,i)=>{names.set(u.id,u.nombre);colors.set(u.id,USER_COLORS[i%USER_COLORS.length]);});
+    return {names,colors};
+  },[allUsers]);
+  const getUserColor=uid=>userMeta.colors.get(uid)||USER_COLORS[0];
+  const getUserName=uid=>userMeta.names.get(uid)||uid;
+
+  const slotKey=(cons,fecha,fi)=>`${cons}|${fecha}|${fi}`;
+  const agendaIndex=useMemo(()=>{
+    const reservaSlots=new Map();
+    const bloqueoSlots=new Map();
+    const weekKeys=weekDates.map(dateKey);
+    const weekSet=new Set(weekKeys);
+    const weekDayByFecha=new Map(weekDates.map(d=>[dateKey(d),new Date(d.getFullYear(),d.getMonth(),d.getDate()).getDay()]));
+
+    reservas.forEach(r=>{
+      if(r.fecha<weekStart||r.fecha>weekEnd)return;
+      const slots=Math.ceil(Number(r.duracion||0)/30);
+      for(let i=0;i<slots;i++) reservaSlots.set(slotKey(r.consultorio,r.fecha,r.franja+i),r);
+    });
+
+    bloqueos.forEach(b=>{
+      const slots=Math.ceil(Number(b.duracion||0)/30);
+      const addBlock=fecha=>{
+        for(let i=0;i<slots;i++){
+          if(b.consultorio==="todos"){
+            CONS.forEach((_,ci)=>bloqueoSlots.set(slotKey(ci,fecha,b.franja+i),b));
+          }else{
+            bloqueoSlots.set(slotKey(b.consultorio,fecha,b.franja+i),b);
+          }
+        }
+      };
+      if(weekSet.has(b.fecha)) addBlock(b.fecha);
+      if(b.repeticion==="semanal"){
+        const [by,bm,bd]=b.fecha.split("-").map(Number);
+        const blockDay=new Date(by,bm-1,bd).getDay();
+        weekKeys.forEach(fecha=>{if(weekDayByFecha.get(fecha)===blockDay)addBlock(fecha);});
+      }
+    });
+    return {reservaSlots,bloqueoSlots};
+  },[reservas,bloqueos,weekStart,weekEnd]);
 
   useEffect(()=>{
     const saved=sessionStorage.getItem(SESSION_KEY);
@@ -101,23 +145,43 @@ function App(){
   },[]);
 
   const fetchAll=useCallback(async(tkn)=>{
+    const activeToken=tkn||token;
+    const needsFullData=view==="mis reservas"||view==="todas";
+    const fetchKey=`${activeToken}|${needsFullData?"full":`${weekStart}|${weekEnd}`}`;
+    if(fetchInFlightKeyRef.current===fetchKey)return;
+    fetchInFlightKeyRef.current=fetchKey;
+    latestFetchKeyRef.current=fetchKey;
     try{
-      const [r,b]=await Promise.all([api({action:"getReservas",token:tkn||token}),api({action:"getBloqueos",token:tkn||token})]);
+      if(!needsFullData){
+        const d=await api({action:"getAgenda",token:activeToken,desde:weekStart,hasta:weekEnd});
+        if(latestFetchKeyRef.current!==fetchKey)return;
+        if(d.ok){
+          setReservas(d.reservas.map(x=>({...x,franja:Number(x.franja),duracion:Number(x.duracion),consultorio:Number(x.consultorio)})));
+          setBloqueos(d.bloqueos.map(x=>({...x,franja:Number(x.franja),duracion:Number(x.duracion),consultorio:x.consultorio==="todos"?"todos":Number(x.consultorio)})));
+          return;
+        }
+      }
+      const [r,b]=await Promise.all([api({action:"getReservas",token:activeToken}),api({action:"getBloqueos",token:activeToken})]);
+      if(latestFetchKeyRef.current!==fetchKey)return;
       if(r.ok) setReservas(r.reservas.map(x=>({...x,franja:Number(x.franja),duracion:Number(x.duracion),consultorio:Number(x.consultorio)})));
       if(b.ok) setBloqueos(b.bloqueos.map(x=>({...x,franja:Number(x.franja),duracion:Number(x.duracion),consultorio:x.consultorio==="todos"?"todos":Number(x.consultorio)})));
-    }catch{}
-  },[token]);
+    }catch{}finally{if(fetchInFlightKeyRef.current===fetchKey)fetchInFlightKeyRef.current=null;}
+  },[token,weekStart,weekEnd,view]);
 
   useEffect(()=>{
-    if(screen==="app"&&token){fetchAll(token);pollRef.current=setInterval(()=>fetchAll(token),30000);}
+    if(screen==="app"&&token){
+      fetchAll(token);
+      const pollMs=view==="mis reservas"||view==="todas"?120000:30000;
+      pollRef.current=setInterval(()=>{if(!document.hidden)fetchAll(token);},pollMs);
+    }
     return()=>{if(pollRef.current)clearInterval(pollRef.current);};
-  },[screen,token]);
+  },[screen,token,fetchAll,view]);
 
   const handleLogin=async()=>{
     setError(null);setLoading(true);
     try{
       const d=await api({action:"login",userId:loginForm.userId,password:loginForm.password});
-      if(d.ok){setCurrentUser(d.user);setToken(d.token);setAllUsers(d.users||[]);sessionStorage.setItem(SESSION_KEY,JSON.stringify({user:d.user,tok:d.token,users:d.users||[]}));setScreen("app");fetchAll(d.token);}
+      if(d.ok){setCurrentUser(d.user);setToken(d.token);setAllUsers(d.users||[]);sessionStorage.setItem(SESSION_KEY,JSON.stringify({user:d.user,tok:d.token,users:d.users||[]}));setScreen("app");}
       else setError(d.error||"Credenciales incorrectas");
     }catch{setError("No se pudo conectar.");}
     setLoading(false);
@@ -125,27 +189,10 @@ function App(){
 
   // Helpers
   const isBlocked=(cons,fecha,fi)=>{
-    const [fy,fm,fd]=fecha.split("-").map(Number);const dia=new Date(fy,fm-1,fd).getDay();
-    return bloqueos.some(b=>{
-      const esC=b.consultorio==="todos"||b.consultorio===cons;if(!esC)return false;
-      const [by,bm,bd]=b.fecha.split("-").map(Number);
-      const mf=b.fecha===fecha,md=b.repeticion==="semanal"&&new Date(by,bm-1,bd).getDay()===dia;
-      if(!mf&&!md)return false;
-      return fi*30>=b.franja*30&&fi*30<b.franja*30+b.duracion;
-    });
+    return agendaIndex.bloqueoSlots.has(slotKey(cons,fecha,fi));
   };
-  const getBloqueoAt=(cons,fecha,fi)=>bloqueos.find(b=>{
-    const esC=b.consultorio==="todos"||b.consultorio===cons;if(!esC)return false;
-    const [fy,fm,fd]=fecha.split("-").map(Number);const dia=new Date(fy,fm-1,fd).getDay();
-    const [by,bm,bd]=b.fecha.split("-").map(Number);
-    const mf=b.fecha===fecha,md=b.repeticion==="semanal"&&new Date(by,bm-1,bd).getDay()===dia;
-    if(!mf&&!md)return false;
-    return fi*30>=b.franja*30&&fi*30<b.franja*30+b.duracion;
-  });
-  const getReserva=(cons,fecha,fi)=>reservas.find(r=>{
-    if(r.consultorio!==cons||r.fecha!==fecha)return false;
-    return fi*30>=r.franja*30&&fi*30<r.franja*30+r.duracion;
-  });
+  const getBloqueoAt=(cons,fecha,fi)=>agendaIndex.bloqueoSlots.get(slotKey(cons,fecha,fi));
+  const getReserva=(cons,fecha,fi)=>agendaIndex.reservaSlots.get(slotKey(cons,fecha,fi));
   const hasConflictLocal=(cons,fecha,fi,dur,excl=null)=>{
     const s=fi*30,e=s+dur;
     return reservas.some(r=>{
