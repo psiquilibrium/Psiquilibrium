@@ -77,7 +77,15 @@ function App(){
   const [loginForm,setLoginForm]=useState({userId:"",password:""});
   const [dragItem,setDragItem]=useState(null); // {type:"reserva"|"bloqueo", id}
   const [clipboard,setClipboard]=useState(null); // {type:"reserva"|"bloqueo", item}
+  const [isMobile,setIsMobile]=useState(()=>window.innerWidth<=720);
+  const [mobileDia,setMobileDia]=useState(()=>Math.min(Math.max((new Date().getDay()||1)-1,0),5));
   const pollRef=useRef(null);
+
+  useEffect(()=>{
+    const onResize=()=>setIsMobile(window.innerWidth<=720);
+    window.addEventListener("resize",onResize);
+    return()=>window.removeEventListener("resize",onResize);
+  },[]);
 
   const weekDates=getWeekDates(weekBase);
   const isAdmin=currentUser?.rol==="admin";
@@ -303,6 +311,89 @@ function App(){
     <button onClick={()=>setBloqueoModal({mode:"nuevo",fecha:dateKey(weekDates[0])})} style={{fontSize:12,background:"var(--blocked)",color:"#8a6500",border:"1px solid var(--blocked-border)"}}>🔒 Crear bloqueo</button>
   ):null;
 
+
+  const MobileConsolidada=()=>{
+    const d=weekDates[mobileDia]||weekDates[0];
+    const fecha=dateKey(d);
+    const isSat=mobileDia===5;
+
+    const MobileCell=({ci,fi})=>{
+      if(isSat&&fi>=8)return <td style={{background:"#eef3f6",borderBottom:"1px solid var(--border)",borderLeft:"1px solid var(--border)"}}></td>;
+      const blocked=isBlocked(ci,fecha,fi);
+      const bloqueo=getBloqueoAt(ci,fecha,fi);
+      const isBS=bloqueo&&bloqueo.franja===fi;
+      const r=!blocked?getReserva(ci,fecha,fi):null;
+      const isRS=r&&r.franja===fi;
+      const cancelled=r?.estado==="cancelada";
+      const color=r?getUserColor(r.userId):null;
+      const canDragR=r&&(isAdmin||currentUser.id===r.userId);
+      const canDragB=bloqueo&&isBS&&isAdmin;
+      const isPaste=!!clipboard;
+
+      return(
+        <td
+          onClick={()=>openCell(ci,fecha,fi)}
+          draggable={!!(canDragR||canDragB)}
+          onDragStart={canDragR?e=>onDragStart(e,"reserva",r.id):canDragB?e=>onDragStart(e,"bloqueo",bloqueo.id):undefined}
+          onDragOver={onDragOver} onDragLeave={onDragLeave} onDrop={e=>onDrop(e,ci,fecha,fi)}
+          style={{padding:"4px 3px",height:40,borderBottom:"1px solid var(--border)",borderLeft:"1px solid var(--border)",
+            cursor:blocked&&!isAdmin?"not-allowed":isPaste?"copy":canDragR||canDragB?"grab":"pointer",
+            background:blocked?"var(--blocked)":cancelled?"var(--cancelled)":r?color+"25":"#fff",
+            borderTop:isRS&&!cancelled?`2px solid ${color}`:isBS?"2px solid var(--blocked-border)":"none",
+            opacity:cancelled?0.65:1,verticalAlign:"middle",userSelect:"none",overflow:"hidden"}}>
+          {isRS&&<div style={{fontSize:10,lineHeight:"12px",color:cancelled?"#999":"var(--navy)",fontWeight:700,overflow:"hidden",whiteSpace:"nowrap",textOverflow:"ellipsis",textDecoration:cancelled?"line-through":"none"}}>
+            {cancelled?"✗ ":""}{getUserName(r.userId)}
+          </div>}
+          {isBS&&!r&&<div style={{fontSize:10,lineHeight:"12px",color:"#8a6500",fontWeight:700,overflow:"hidden",whiteSpace:"nowrap",textOverflow:"ellipsis"}}>🔒 {bloqueo.nota||"Bloqueo"}</div>}
+        </td>
+      );
+    };
+
+    return(
+      <div>
+        <div style={{display:"grid",gridTemplateColumns:"repeat(3,1fr)",gap:6,marginBottom:10}}>
+          {weekDates.map((dia,idx)=>{
+            const selected=idx===mobileDia;
+            const isToday=dateKey(dia)===dateKey(new Date());
+            return(
+              <button key={idx} onClick={()=>setMobileDia(idx)}
+                style={{fontSize:12,padding:"8px 6px",background:selected?"var(--navy)":isToday?"var(--cyan-light)":"#fff",
+                  color:selected?"#fff":"var(--navy)",border:`1px solid ${selected?"var(--navy)":"var(--border)"}`,fontWeight:selected?700:500}}>
+                {DIAS[idx]} {fmt(dia)}
+              </button>
+            );
+          })}
+        </div>
+        <div style={{...s.card,padding:"0.75rem",marginBottom:10}}>
+          <div style={{fontWeight:700,fontSize:14,marginBottom:8,color:"var(--navy)"}}>
+            {DIAS_FULL[mobileDia]} {fmt(d)}
+          </div>
+          <div style={{overflowX:"hidden"}}>
+            <table style={{width:"100%",borderCollapse:"collapse",tableLayout:"fixed",fontSize:11}}>
+              <thead>
+                <tr>
+                  <th style={{width:46,padding:"6px 2px",fontSize:10,color:"var(--muted)",background:"var(--cyan-light)",borderBottom:"2px solid var(--border)",borderRight:"1px solid var(--border)"}}>Hora</th>
+                  {CONS.map((c,ci)=><th key={ci} style={{padding:"6px 1px",fontSize:10,fontWeight:700,color:"#fff",background:CONS_COLORS[ci],borderBottom:"2px solid var(--border)",borderLeft:"1px solid var(--border)"}}>C{ci+1}</th>)}
+                </tr>
+              </thead>
+              <tbody>
+                {FRANJAS.map((hora,fi)=>(
+                  <tr key={fi}>
+                    <td style={{padding:"4px 3px",fontSize:10,color:"var(--muted)",borderBottom:"1px solid var(--border)",borderRight:"1px solid var(--border)",background:"var(--cyan-light)",fontWeight:fi%2===0?700:400,whiteSpace:"nowrap"}}>{hora}</td>
+                    {CONS.map((_,ci)=><MobileCell key={ci} ci={ci} fi={fi}/>)}
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </div>
+        <div style={{display:"flex",gap:10,flexWrap:"wrap",alignItems:"center"}}>
+          {CONS.map((c,i)=><div key={i} style={{display:"flex",alignItems:"center",gap:4,fontSize:11,color:"var(--muted)"}}><span style={{width:10,height:10,borderRadius:2,background:CONS_COLORS[i],display:"inline-block"}}></span>{c}</div>)}
+        </div>
+      </div>
+    );
+  };
+
   // Celda genérica para vistas "todos" y "semana"
   const Celda=({cons,fecha,fi,isSat,compact=false})=>{
     if(isSat&&fi>=8)return<td style={{background:"#eef3f6",borderBottom:"1px solid var(--border)",borderLeft:"1px solid var(--border)"}}></td>;
@@ -385,6 +476,7 @@ function App(){
             <NavSemana/>
             <BtnBloqueo/>
           </div>
+          {isMobile?<MobileConsolidada/>:(<>
           <div style={{overflowX:"auto"}}>
             <table style={{borderCollapse:"collapse",fontSize:11,width:"100%",tableLayout:"fixed"}}>
               <thead>
@@ -451,6 +543,7 @@ function App(){
             <div style={{display:"flex",alignItems:"center",gap:4,fontSize:11,color:"var(--muted)"}}><span style={{width:12,height:12,borderRadius:2,background:"var(--blocked-border)",display:"inline-block"}}></span>Bloqueado</div>
             <div style={{display:"flex",alignItems:"center",gap:4,fontSize:11,color:"var(--muted)"}}><span style={{width:12,height:12,borderRadius:2,background:"var(--cancelled)",display:"inline-block"}}></span>Cancelada</div>
           </div>
+          </>)}
         </div>
       )}
 
