@@ -625,6 +625,39 @@ function App(){
     );
   };
 
+  const TodosConsultorios=()=>(
+    <>
+      <div style={{overflowX:"auto"}}>
+        <table style={{width:"100%",borderCollapse:"collapse",tableLayout:"fixed",fontSize:12,marginBottom:4}}>
+          <thead>
+            <tr>
+              <th style={{width:80,background:"var(--cyan-light)",borderBottom:"2px solid var(--border)"}}></th>
+              {weekDates.map((d,i)=>{const isToday=dateKey(d)===dateKey(new Date());return<th key={i} style={{padding:"6px 2px",fontWeight:isToday?700:500,color:isToday?"#fff":"var(--navy)",textAlign:"center",borderBottom:"2px solid var(--border)",background:isToday?"var(--navy)":"var(--cyan-light)",borderLeft:"1px solid var(--border)"}}>{DIAS[i]}<br/><span style={{fontSize:10,fontWeight:400}}>{fmt(d)}</span></th>;})}
+            </tr>
+          </thead>
+        </table>
+        {CONS.map((consNombre,ci)=>(
+          <table key={ci} style={{width:"100%",borderCollapse:"collapse",tableLayout:"fixed",fontSize:11,marginBottom:2}}>
+            <tbody>
+              {FRANJAS.map((hora,fi)=>(
+                <tr key={fi}>
+                  <td style={{width:80,padding:"1px 4px",fontSize:9,color:"var(--muted)",borderBottom:"1px solid var(--border)",background:"var(--cyan-light)",verticalAlign:"middle"}}>
+                    {fi===0?<strong style={{fontSize:10,color:"var(--navy)",display:"block"}}>{consNombre}</strong>:null}
+                    <span>{hora}</span>
+                  </td>
+                  {weekDates.map((d,di)=><Celda key={di} cons={ci} fecha={dateKey(d)} fi={fi} isSat={di===5} compact={true}/>)}
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        ))}
+      </div>
+      <div style={{marginTop:8,display:"flex",gap:12,flexWrap:"wrap"}}>
+        {allUsers.map((u,i)=><div key={u.id} style={{display:"flex",alignItems:"center",gap:5,fontSize:11,color:"var(--muted)"}}><span style={{width:10,height:10,borderRadius:2,background:USER_COLORS[i%USER_COLORS.length],display:"inline-block"}}></span>{u.nombre}</div>)}
+      </div>
+    </>
+  );
+
   if(screen==="login")return(
     <div style={{maxWidth:360,margin:"3rem auto",...s.card}}>
       <div style={{display:"flex",alignItems:"center",gap:10,marginBottom:20}}>
@@ -681,7 +714,7 @@ function App(){
           <span style={{fontSize:12,background:"var(--cyan-light)",padding:"2px 8px",borderRadius:6,color:"var(--navy)"}}>{currentUser.nombre} · {currentUser.rol}</span>
         </div>
         <div style={{display:"flex",gap:6,flexWrap:"wrap"}}>
-          {["consolidada","todos","semana","mis reservas",...(isSocio?["todas"]:[])].map(v=>(
+          {["consolidada","semana","mis reservas",...(isSocio?["todas"]:[])].map(v=>(
             <button key={v} onClick={()=>setView(v)} style={{fontSize:12,background:view===v?"var(--navy)":"transparent",color:view===v?"#fff":"var(--navy)",border:`1px solid ${view===v?"var(--navy)":"var(--border)"}`}}>{v.charAt(0).toUpperCase()+v.slice(1)}</button>
           ))}
           <button onClick={()=>fetchAll(token)} style={{fontSize:12,color:"var(--muted)"}} title="Actualizar">↺</button>
@@ -779,34 +812,7 @@ function App(){
             <NavSemana/>
             <BtnBloqueo/>
           </div>
-          <div style={{overflowX:"auto"}}>
-            <table style={{width:"100%",borderCollapse:"collapse",tableLayout:"fixed",fontSize:12,marginBottom:4}}>
-              <thead>
-                <tr>
-                  <th style={{width:80,background:"var(--cyan-light)",borderBottom:"2px solid var(--border)"}}></th>
-                  {weekDates.map((d,i)=>{const isToday=dateKey(d)===dateKey(new Date());return<th key={i} style={{padding:"6px 2px",fontWeight:isToday?700:500,color:isToday?"#fff":"var(--navy)",textAlign:"center",borderBottom:"2px solid var(--border)",background:isToday?"var(--navy)":"var(--cyan-light)",borderLeft:"1px solid var(--border)"}}>{DIAS[i]}<br/><span style={{fontSize:10,fontWeight:400}}>{fmt(d)}</span></th>;})}
-                </tr>
-              </thead>
-            </table>
-            {CONS.map((consNombre,ci)=>(
-              <table key={ci} style={{width:"100%",borderCollapse:"collapse",tableLayout:"fixed",fontSize:11,marginBottom:2}}>
-                <tbody>
-                  {FRANJAS.map((hora,fi)=>(
-                    <tr key={fi}>
-                      <td style={{width:80,padding:"1px 4px",fontSize:9,color:"var(--muted)",borderBottom:"1px solid var(--border)",background:"var(--cyan-light)",verticalAlign:"middle"}}>
-                        {fi===0?<strong style={{fontSize:10,color:"var(--navy)",display:"block"}}>{consNombre}</strong>:null}
-                        <span>{hora}</span>
-                      </td>
-                      {weekDates.map((d,di)=><Celda key={di} cons={ci} fecha={dateKey(d)} fi={fi} isSat={di===5} compact={true}/>)}
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            ))}
-          </div>
-          <div style={{marginTop:8,display:"flex",gap:12,flexWrap:"wrap"}}>
-            {allUsers.map((u,i)=><div key={u.id} style={{display:"flex",alignItems:"center",gap:5,fontSize:11,color:"var(--muted)"}}><span style={{width:10,height:10,borderRadius:2,background:USER_COLORS[i%USER_COLORS.length],display:"inline-block"}}></span>{u.nombre}</div>)}
-          </div>
+          <TodosConsultorios/>
         </div>
       )}
 
@@ -818,9 +824,10 @@ function App(){
             <BtnBloqueo/>
           </div>
           <div style={{display:"flex",gap:6,marginBottom:10,flexWrap:"wrap"}}>
+            <button onClick={()=>setSelCons("todos")} style={{fontSize:12,background:selCons==="todos"?"var(--navy)":"transparent",color:selCons==="todos"?"#fff":"var(--navy)",border:`1px solid ${selCons==="todos"?"var(--navy)":"var(--border)"}`}}>Todos los consultorios</button>
             {CONS.map((c,i)=><button key={i} onClick={()=>setSelCons(i)} style={{fontSize:12,background:selCons===i?"var(--navy)":"transparent",color:selCons===i?"#fff":"var(--navy)",border:`1px solid ${selCons===i?"var(--navy)":"var(--border)"}`}}>{c}</button>)}
           </div>
-          <div style={{overflowX:"auto"}}>
+          {selCons==="todos"?<TodosConsultorios/>:<div style={{overflowX:"auto"}}>
             <table style={{width:"100%",borderCollapse:"collapse",tableLayout:"fixed",fontSize:12}}>
               <thead>
                 <tr>
@@ -837,10 +844,10 @@ function App(){
                 ))}
               </tbody>
             </table>
-          </div>
-          <div style={{marginTop:12,display:"flex",gap:12,flexWrap:"wrap"}}>
+          </div>}
+          {selCons!=="todos"&&<div style={{marginTop:12,display:"flex",gap:12,flexWrap:"wrap"}}>
             {allUsers.map((u,i)=><div key={u.id} style={{display:"flex",alignItems:"center",gap:5,fontSize:11,color:"var(--muted)"}}><span style={{width:10,height:10,borderRadius:2,background:USER_COLORS[i%USER_COLORS.length],display:"inline-block"}}></span>{u.nombre}</div>)}
-          </div>
+          </div>}
         </div>
       )}
 
