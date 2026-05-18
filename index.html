@@ -634,6 +634,7 @@ function App(){
     const detalle=x.items?`${x.tipo} (${x.cantidad})`:x.problemas.join(", ");
     return <div key={i} style={{fontSize:11,color:"var(--muted)",marginTop:3}}>Filas {filas}: {detalle}</div>;
   });
+  const countDiag=v=>Number.isFinite(Number(v))?Number(v):0;
 
   return(
     <div style={{paddingBottom:"2rem"}}>
@@ -854,19 +855,19 @@ function App(){
                 <div style={s.muted}>{diagnostico.generadoEn}</div>
               </div>
               <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(150px,1fr))",gap:8}}>
-                <div style={s.muted}>Reservas activas: <strong>{diagnostico.resumen.reservasActivas}</strong></div>
-                <div style={s.muted}>Reservas duplicadas: <strong>{diagnostico.resumen.reservasDuplicadas}</strong></div>
-                <div style={s.muted}>Reservas inválidas: <strong>{diagnostico.resumen.reservasInvalidas}</strong></div>
-                <div style={s.muted}>Bloqueos activos: <strong>{diagnostico.resumen.bloqueosActivos}</strong></div>
-                <div style={s.muted}>Bloqueos duplicados: <strong>{diagnostico.resumen.bloqueosDuplicados}</strong></div>
-                <div style={s.muted}>Bloqueos inválidos: <strong>{diagnostico.resumen.bloqueosInvalidos}</strong></div>
+                <div style={s.muted}>Reservas activas: <strong>{countDiag(diagnostico.resumen.reservasActivas)}</strong></div>
+                <div style={s.muted}>Reservas duplicadas: <strong>{countDiag(diagnostico.resumen.reservasDuplicadas)}</strong></div>
+                <div style={s.muted}>Reservas inválidas: <strong>{countDiag(diagnostico.resumen.reservasInvalidas)}</strong></div>
+                <div style={s.muted}>Bloqueos activos: <strong>{countDiag(diagnostico.resumen.bloqueosActivos)}</strong></div>
+                <div style={s.muted}>Bloqueos duplicados: <strong>{countDiag(diagnostico.resumen.bloqueosDuplicados)}</strong></div>
+                <div style={s.muted}>Bloqueos inválidos: <strong>{countDiag(diagnostico.resumen.bloqueosInvalidos)}</strong></div>
               </div>
               <div style={{marginTop:8}}>
                 {renderEjemplos(diagnostico.reservas.duplicados)}
                 {renderEjemplos(diagnostico.reservas.invalidos)}
                 {renderEjemplos(diagnostico.bloqueos.duplicados)}
                 {renderEjemplos(diagnostico.bloqueos.invalidos)}
-                {diagnostico.resumen.reservasDuplicadas+diagnostico.resumen.reservasInvalidas+diagnostico.resumen.bloqueosDuplicados+diagnostico.resumen.bloqueosInvalidos===0&&<div style={s.muted}>No se encontraron duplicados ni inválidos activos.</div>}
+                {countDiag(diagnostico.resumen.reservasDuplicadas)+countDiag(diagnostico.resumen.reservasInvalidas)+countDiag(diagnostico.resumen.bloqueosDuplicados)+countDiag(diagnostico.resumen.bloqueosInvalidos)===0&&<div style={s.muted}>No se encontraron duplicados ni inválidos activos.</div>}
               </div>
             </div>
           )}
