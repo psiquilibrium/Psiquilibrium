@@ -75,6 +75,7 @@ function App(){
   const [diagnostico,setDiagnostico]=useState(null);
   const [form,setForm]=useState({nota:"",franjaInicio:"0",franjaFin:"2",profesionalId:""});
   const [bForm,setBForm]=useState({nota:"",franjaInicio:"0",franjaFin:"2",repeticion:"ninguna",consultorio:"0"});
+  const [todasFiltros,setTodasFiltros]=useState({profesional:"todos",consultorio:"todos",estado:"todos",texto:"",alcance:"semana",desde:"",hasta:""});
   const [conflict,setConflict]=useState(false);
   const [loginForm,setLoginForm]=useState({userId:"",password:""});
   const [dragItem,setDragItem]=useState(null); // {type:"reserva"|"bloqueo", id}
@@ -629,6 +630,23 @@ function App(){
   const misReservas=reservas.filter(r=>r.userId===currentUser?.id).sort((a,b)=>a.fecha.localeCompare(b.fecha)||a.franja-b.franja);
   const todasReservas=[...reservas].sort((a,b)=>a.fecha.localeCompare(b.fecha)||a.franja-b.franja);
   const profesionales=allUsers.filter(u=>u.rol==="profesional");
+  const reservasFiltradas=todasReservas.filter(r=>{
+    if(todasFiltros.profesional!=="todos"&&r.userId!==todasFiltros.profesional)return false;
+    if(todasFiltros.consultorio!=="todos"&&String(r.consultorio)!==todasFiltros.consultorio)return false;
+    if(todasFiltros.estado!=="todos"&&r.estado!==todasFiltros.estado)return false;
+    if(todasFiltros.texto.trim()&&!String(r.nota||"").toLowerCase().includes(todasFiltros.texto.trim().toLowerCase()))return false;
+    if(todasFiltros.alcance==="semana"&&(r.fecha<weekStart||r.fecha>weekEnd))return false;
+    if(todasFiltros.alcance==="rango"){
+      const desde=todasFiltros.desde||weekStart,hasta=todasFiltros.hasta||weekEnd;
+      if(r.fecha<desde||r.fecha>hasta)return false;
+    }
+    return true;
+  });
+  const conteoFiltrado=reservasFiltradas.reduce((acc,r)=>{
+    if(r.estado==="cancelada")acc.canceladas++;
+    else acc.confirmadas++;
+    return acc;
+  },{confirmadas:0,canceladas:0});
   const renderEjemplos=items=>(items||[]).slice(0,3).map((x,i)=>{
     const filas=x.items?x.items.map(it=>it.fila).join(", "):x.fila;
     const detalle=x.items?`${x.tipo} (${x.cantidad})`:x.problemas.join(", ");
@@ -841,12 +859,52 @@ function App(){
       {/* ── TODAS ── */}
       {view==="todas"&&isSocio&&(
         <div>
-          <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:12,flexWrap:"wrap",gap:8}}>
-            <div style={{fontWeight:600,fontSize:14,color:"var(--navy)"}}>Todas las reservas ({todasReservas.length})</div>
+          <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:10,flexWrap:"wrap",gap:8}}>
+            <div>
+              <div style={{fontWeight:600,fontSize:14,color:"var(--navy)"}}>Todas las reservas ({reservasFiltradas.length} de {todasReservas.length})</div>
+              <div style={s.muted}>Confirmadas: {conteoFiltrado.confirmadas} · Canceladas: {conteoFiltrado.canceladas}</div>
+            </div>
             {isAdmin&&<div style={{display:"flex",gap:6,flexWrap:"wrap"}}>
               <button onClick={handleDiagnostico} disabled={loading} style={{fontSize:12,background:"#fff",color:"var(--navy)",border:"1px solid var(--border)"}}>Diagnosticar datos</button>
               <button onClick={async()=>{setLoading(true);try{const d=await api({action:"generarPreestablecidas",token});if(d.ok){await fetchAll(token);showToast(`${d.creadas} reservas fijas generadas`);}else setError(d.error);}catch{setError("Error.");}setLoading(false);}} style={{fontSize:12,background:"var(--cyan-light)",color:"var(--navy)"}}>⚡ Generar reservas fijas</button>
             </div>}
+          </div>
+          <div style={{...s.card,padding:"0.75rem",marginBottom:12}}>
+            <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(135px,1fr))",gap:8,alignItems:"end"}}>
+              <div><label style={s.label}>Profesional</label>
+                <select value={todasFiltros.profesional} onChange={e=>setTodasFiltros(f=>({...f,profesional:e.target.value}))}>
+                  <option value="todos">Todos</option>
+                  {profesionales.map(u=><option key={u.id} value={u.id}>{u.nombre}</option>)}
+                </select>
+              </div>
+              <div><label style={s.label}>Consultorio</label>
+                <select value={todasFiltros.consultorio} onChange={e=>setTodasFiltros(f=>({...f,consultorio:e.target.value}))}>
+                  <option value="todos">Todos</option>
+                  {CONS.map((c,i)=><option key={i} value={i}>{c}</option>)}
+                </select>
+              </div>
+              <div><label style={s.label}>Estado</label>
+                <select value={todasFiltros.estado} onChange={e=>setTodasFiltros(f=>({...f,estado:e.target.value}))}>
+                  <option value="todos">Todos</option>
+                  <option value="confirmada">Confirmadas</option>
+                  <option value="cancelada">Canceladas</option>
+                </select>
+              </div>
+              <div><label style={s.label}>Fecha</label>
+                <select value={todasFiltros.alcance} onChange={e=>setTodasFiltros(f=>({...f,alcance:e.target.value}))}>
+                  <option value="semana">Semana visible</option>
+                  <option value="rango">Rango</option>
+                  <option value="todas">Todas</option>
+                </select>
+              </div>
+              {todasFiltros.alcance==="rango"&&(<>
+                <div><label style={s.label}>Desde</label><input type="date" value={todasFiltros.desde||weekStart} onChange={e=>setTodasFiltros(f=>({...f,desde:e.target.value}))}/></div>
+                <div><label style={s.label}>Hasta</label><input type="date" value={todasFiltros.hasta||weekEnd} onChange={e=>setTodasFiltros(f=>({...f,hasta:e.target.value}))}/></div>
+              </>)}
+              <div><label style={s.label}>Nota</label><input value={todasFiltros.texto} onChange={e=>setTodasFiltros(f=>({...f,texto:e.target.value}))} placeholder="Buscar texto"/></div>
+              <button onClick={()=>setTodasFiltros({profesional:"todos",consultorio:"todos",estado:"todos",texto:"",alcance:"semana",desde:"",hasta:""})} style={{fontSize:12,color:"var(--muted)"}}>Limpiar</button>
+            </div>
+            {todasFiltros.alcance==="semana"&&<div style={{marginTop:10}}><NavSemana/></div>}
           </div>
           {diagnostico&&(
             <div style={{...s.card,marginBottom:12,borderLeft:"3px solid var(--cyan)"}}>
@@ -871,7 +929,8 @@ function App(){
               </div>
             </div>
           )}
-          {todasReservas.map(r=>{
+          {reservasFiltradas.length===0&&<p style={s.muted}>No hay reservas con esos filtros.</p>}
+          {reservasFiltradas.map(r=>{
             const u=allUsers.find(x=>x.id===r.userId);const color=getUserColor(r.userId);const cancelled=r.estado==="cancelada";
             const syncing=isSyncing(r.id);
             const syncLabel=getSyncLabel(r.id);
