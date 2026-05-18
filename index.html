@@ -86,7 +86,7 @@ function App(){
   const agendaVersionRef=useRef({key:null,version:null});
   const dataVersionRef=useRef(0);
   const pendingMoveIdsRef=useRef(new Set());
-  const [syncingIds,setSyncingIds]=useState([]);
+  const [syncingById,setSyncingById]=useState({});
   const pasteInFlightRef=useRef(false);
   const formActionInFlightRef=useRef(false);
 
@@ -226,16 +226,23 @@ function App(){
   const getBloqueoAt=(cons,fecha,fi)=>agendaIndex.bloqueoSlots.get(slotKey(cons,fecha,fi));
   const getReserva=(cons,fecha,fi)=>agendaIndex.reservaSlots.get(slotKey(cons,fecha,fi));
   const isTempId=id=>String(id||"").startsWith("temp_");
-  const isSyncing=id=>isTempId(id)||syncingIds.includes(String(id));
-  const beginSync=id=>{
+  const isSyncing=id=>{
+    const key=String(id||"");
+    return isTempId(id)||pendingMoveIdsRef.current.has(key)||!!syncingById[key];
+  };
+  const getSyncLabel=id=>{
+    const key=String(id||"");
+    return isTempId(id)?"Guardando...":syncingById[key]||"";
+  };
+  const beginSync=(id,label="Guardando...")=>{
     const key=String(id);
     pendingMoveIdsRef.current.add(key);
-    setSyncingIds(prev=>prev.includes(key)?prev:[...prev,key]);
+    setSyncingById(prev=>({...prev,[key]:label}));
   };
   const endSync=id=>{
     const key=String(id);
     pendingMoveIdsRef.current.delete(key);
-    setSyncingIds(prev=>prev.filter(x=>x!==key));
+    setSyncingById(prev=>{const next={...prev};delete next[key];return next;});
   };
   const markLocalChange=()=>{dataVersionRef.current+=1;return dataVersionRef.current;};
   const normalizeReservas=items=>Array.from(new Map(items.map(x=>[x.id,{...x,franja:Number(x.franja),duracion:Number(x.duracion),consultorio:Number(x.consultorio)}])).values());
@@ -278,19 +285,20 @@ function App(){
     if(hasConflictLocal(modal.consultorio,modal.fecha,fi,dur,modal.reserva.id)){setConflict(true);return;}
     formActionInFlightRef.current=true;
     setLoading(true);
+    const previous=modal.reserva;
     markLocalChange();
     setReservas(prev=>prev.map(r=>r.id===modal.reserva.id?{...r,duracion:dur,nota:form.nota}:r));
     setModal(null);showToast("Reserva actualizada");
     try{
       const d=await api({action:"editarReserva",token,id:modal.reserva.id,duracion:dur,nota:form.nota});
-      if(!d.ok){setError(d.error);fetchAll(token);}
-    }catch{setError("Error al actualizar.");fetchAll(token);}
+      if(!d.ok){setReservas(prev=>prev.map(r=>r.id===previous.id?previous:r));setError(d.error);fetchAll(token);}
+    }catch{setReservas(prev=>prev.map(r=>r.id===previous.id?previous:r));setError("Error al actualizar.");fetchAll(token);}
     finally{formActionInFlightRef.current=false;setLoading(false);}
   };
   const handleEstado=async(id,estado)=>{
     if(isSyncing(id)){setError("La reserva aún se está sincronizando. Intenta de nuevo en unos segundos.");fetchAll(token);return;}
     const previous=reservas.find(r=>r.id===id);
-    beginSync(id);
+    beginSync(id,estado==="cancelada"?"Cancelando...":"Confirmando...");
     markLocalChange();
     setReservas(prev=>prev.map(r=>r.id===id?{...r,estado}:r));
     setModal(null);
@@ -305,7 +313,7 @@ function App(){
   const handleDelete=async(id)=>{
     if(isSyncing(id)){setError("La reserva aún se está sincronizando. Intenta de nuevo en unos segundos.");fetchAll(token);return;}
     const previous=reservas.find(r=>r.id===id);
-    beginSync(id);
+    beginSync(id,"Eliminando...");
     markLocalChange();
     setReservas(prev=>prev.filter(r=>r.id!==id));
     setModal(null);
@@ -329,20 +337,21 @@ function App(){
     e.preventDefault();e.currentTarget.classList.remove("drop-target","drop-target-blocked");
     if(!dragItem)return;
     if(isSyncing(dragItem.id)){setError("Este elemento aún se está sincronizando. Intenta de nuevo en unos segundos.");setDragItem(null);fetchAll(token);return;}
-    beginSync(dragItem.id);
+    beginSync(dragItem.id,"Moviendo...");
     if(dragItem.type==="reserva"){
       const r=reservas.find(x=>x.id===dragItem.id);
       if(!r||r.consultorio===cons&&r.fecha===fecha&&r.franja===fi){endSync(dragItem.id);setDragItem(null);return;}
       if(isBlocked(cons,fecha,fi)){setError("Franja bloqueada");endSync(dragItem.id);setDragItem(null);return;}
       if(hasConflictLocal(cons,fecha,fi,r.duracion,r.id)){setError("Conflicto de horario");endSync(dragItem.id);setDragItem(null);return;}
+      const previous=r;
       // Optimista
       markLocalChange();
       setReservas(prev=>prev.map(x=>x.id===dragItem.id?{...x,consultorio:cons,fecha,franja:fi}:x));
       showToast("Reserva movida");
       try{
         const d=await api({action:"moverReserva",token,id:dragItem.id,consultorio:cons,fecha,franja:fi});
-        if(!d.ok){setError(d.error);fetchAll(token);}
-      }catch{setError("Error al mover.");fetchAll(token);}
+        if(!d.ok){setReservas(prev=>prev.map(x=>x.id===previous.id?previous:x));setError(d.error);fetchAll(token);}
+      }catch{setReservas(prev=>prev.map(x=>x.id===previous.id?previous:x));setError("Error al mover.");fetchAll(token);}
       finally{endSync(dragItem.id);}
     } else {
       const b=bloqueos.find(x=>x.id===dragItem.id);
@@ -361,7 +370,7 @@ function App(){
             return;
           }
           fetchAll(token);
-        }catch{setError("Error al mover bloqueo.");fetchAll(token);}
+        }catch{setBloqueos(prev=>prev.map(x=>x.id===b.id?b:x));setError("Error al mover bloqueo.");fetchAll(token);}
         finally{endSync(b.id);}
       }else{
         endSync(dragItem.id);
@@ -418,7 +427,7 @@ function App(){
   const handleEliminarBloqueo=async(id)=>{
     if(isSyncing(id)){setError("El bloqueo aún se está sincronizando. Intenta de nuevo en unos segundos.");fetchAll(token);return;}
     const previous=bloqueos.find(b=>b.id===id);
-    beginSync(id);
+    beginSync(id,"Eliminando...");
     markLocalChange();
     setBloqueos(prev=>prev.filter(b=>b.id!==id));
     setBloqueoModal(null);
@@ -485,6 +494,7 @@ function App(){
       const cancelled=r?.estado==="cancelada";
       const color=r?getUserColor(r.userId):null;
       const syncing=isSyncing(r?.id)||isSyncing(bloqueo?.id);
+      const syncLabel=getSyncLabel(r?.id)||getSyncLabel(bloqueo?.id);
       const canDragR=r&&!isSyncing(r.id)&&(isAdmin||currentUser.id===r.userId);
       const canDragB=bloqueo&&isBS&&!isSyncing(bloqueo.id)&&isAdmin;
       const isPaste=!!clipboard;
@@ -504,7 +514,7 @@ function App(){
             {cancelled?"✗ ":""}{getUserName(r.userId)}
           </div>}
           {isBS&&!r&&<div style={{fontSize:10,lineHeight:"12px",color:"#8a6500",fontWeight:700,overflow:"hidden",whiteSpace:"nowrap",textOverflow:"ellipsis"}}>🔒 {bloqueo.nota||"Bloqueo"}</div>}
-          {syncing&&<div style={{fontSize:9,lineHeight:"11px",color:"var(--muted)",fontWeight:600,whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis"}}>Guardando…</div>}
+          {syncing&&<div style={{fontSize:9,lineHeight:"11px",color:"var(--muted)",fontWeight:600,whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis"}}>{syncLabel}</div>}
         </td>
       );
     };
@@ -565,6 +575,7 @@ function App(){
     const cancelled=r?.estado==="cancelada";
     const color=r?getUserColor(r.userId):null;
     const syncing=isSyncing(r?.id)||isSyncing(bloqueo?.id);
+    const syncLabel=getSyncLabel(r?.id)||getSyncLabel(bloqueo?.id);
     const canDragR=r&&!isSyncing(r.id)&&(isAdmin||currentUser.id===r.userId);
     const canDragB=bloqueo&&!isSyncing(bloqueo.id)&&isAdmin;
     const isPaste=!!clipboard;
@@ -583,7 +594,7 @@ function App(){
           {cancelled?"✗ ":""}{getUserName(r.userId)}
         </div>}
         {isBS&&!r&&<div style={{fontSize:compact?7:9,color:"#8a6500",fontWeight:600,overflow:"hidden",whiteSpace:"nowrap"}}>🔒{bloqueo.nota?` ${bloqueo.nota.slice(0,8)}`:""}</div>}
-        {syncing&&!compact&&<div style={{fontSize:8,color:"var(--muted)",fontWeight:600,whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis"}}>Guardando…</div>}
+        {syncing&&!compact&&<div style={{fontSize:8,color:"var(--muted)",fontWeight:600,whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis"}}>{syncLabel}</div>}
       </td>
     );
   };
@@ -673,6 +684,7 @@ function App(){
                         const cancelled=r?.estado==="cancelada";
                         const color=r?getUserColor(r.userId):null;
                         const syncing=isSyncing(r?.id)||isSyncing(bloqueo?.id);
+                        const syncLabel=getSyncLabel(r?.id)||getSyncLabel(bloqueo?.id);
                         const canDragR=r&&!isSyncing(r.id)&&(isAdmin||currentUser.id===r.userId);
                         const canDragB=bloqueo&&isBS&&!isSyncing(bloqueo.id)&&isAdmin;
                         const isPaste=!!clipboard;
@@ -691,7 +703,7 @@ function App(){
                               opacity:syncing?0.45:cancelled?0.65:1,verticalAlign:"middle",userSelect:"none",overflow:"hidden"}}>
                 {isRS&&<div style={{fontSize:10,color:cancelled?"#999":"var(--navy)",fontWeight:700,overflow:"hidden",whiteSpace:"nowrap",textOverflow:"ellipsis",textDecoration:cancelled?"line-through":"none",paddingLeft:2}}>{cancelled?"✗ ":""}{getUserName(r.userId)}</div>}
                             {isBS&&!r&&<div style={{fontSize:10,color:"#8a6500",fontWeight:600}}>🔒</div>}
-                            {syncing&&<div style={{fontSize:9,color:"var(--muted)",fontWeight:600,whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis"}}>Guardando…</div>}
+                            {syncing&&<div style={{fontSize:9,color:"var(--muted)",fontWeight:600,whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis"}}>{syncLabel}</div>}
                           </td>
                         );
                       });
@@ -791,11 +803,12 @@ function App(){
           {misReservas.map(r=>{
             const cancelled=r.estado==="cancelada";
             const syncing=isSyncing(r.id);
+            const syncLabel=getSyncLabel(r.id);
             return(
               <div key={r.id} style={{...s.card,marginBottom:8,display:"flex",justifyContent:"space-between",alignItems:"center",borderLeft:`3px solid ${cancelled?"#ccc":getUserColor(r.userId)}`,opacity:syncing?0.5:cancelled?0.7:1}}>
                 <div>
                   <div style={{fontWeight:600,fontSize:13,color:"var(--navy)",textDecoration:cancelled?"line-through":"none"}}>{CONS[r.consultorio]} · {FRANJAS[r.franja]} – {FRANJAS[r.franja+r.duracion/30]||"18:00"}</div>
-                  <div style={s.muted}>{r.fecha}{r.nota?` · ${r.nota}`:""}{cancelled?" · CANCELADA":""}{r.tipo==="preestablecida"?" · (fija)":""}{syncing?" · Guardando…":""}</div>
+                  <div style={s.muted}>{r.fecha}{r.nota?` · ${r.nota}`:""}{cancelled?" · CANCELADA":""}{r.tipo==="preestablecida"?" · (fija)":""}{syncing?` · ${syncLabel}`:""}</div>
                 </div>
                 <div style={{display:"flex",gap:6,flexShrink:0}}>
                   {!cancelled&&<button onClick={()=>handleEstado(r.id,"cancelada")} disabled={syncing} style={{fontSize:11,color:"var(--danger)",background:"var(--danger-bg)",border:"1px solid #f5c6c0"}}>✗ Cancelar</button>}
@@ -817,11 +830,12 @@ function App(){
           {todasReservas.map(r=>{
             const u=allUsers.find(x=>x.id===r.userId);const color=getUserColor(r.userId);const cancelled=r.estado==="cancelada";
             const syncing=isSyncing(r.id);
+            const syncLabel=getSyncLabel(r.id);
             return(
               <div key={r.id} style={{...s.card,borderLeft:`3px solid ${cancelled?"#ccc":color}`,marginBottom:8,display:"flex",justifyContent:"space-between",alignItems:"center",opacity:syncing?0.5:cancelled?0.7:1}}>
                 <div style={{flex:1}}>
                   <div style={{fontWeight:600,fontSize:13,color:"var(--navy)",textDecoration:cancelled?"line-through":"none"}}>{CONS[r.consultorio]} · {FRANJAS[r.franja]} – {FRANJAS[r.franja+r.duracion/30]||"18:00"}</div>
-                  <div style={s.muted}>{r.fecha} · {u?.nombre||r.userId}{r.nota?` · ${r.nota}`:""}{r.tipo==="preestablecida"?" · (fija)":""}{cancelled?" · CANCELADA":""}{syncing?" · Guardando…":""}</div>
+                  <div style={s.muted}>{r.fecha} · {u?.nombre||r.userId}{r.nota?` · ${r.nota}`:""}{r.tipo==="preestablecida"?" · (fija)":""}{cancelled?" · CANCELADA":""}{syncing?` · ${syncLabel}`:""}</div>
                 </div>
                 <div style={{display:"flex",gap:6,flexShrink:0}}>
                   {isAdmin&&!cancelled&&<button onClick={()=>handleEstado(r.id,"cancelada")} disabled={syncing} style={{fontSize:11,color:"var(--danger)",background:"var(--danger-bg)",border:"1px solid #f5c6c0"}}>✗</button>}
