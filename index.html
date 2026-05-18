@@ -86,6 +86,9 @@ function App(){
   const agendaVersionRef=useRef({key:null,version:null});
   const dataVersionRef=useRef(0);
   const pendingMoveIdsRef=useRef(new Set());
+  const [syncingIds,setSyncingIds]=useState([]);
+  const pasteInFlightRef=useRef(false);
+  const formActionInFlightRef=useRef(false);
 
   useEffect(()=>{
     const onResize=()=>setIsMobile(window.innerWidth<=720);
@@ -223,6 +226,17 @@ function App(){
   const getBloqueoAt=(cons,fecha,fi)=>agendaIndex.bloqueoSlots.get(slotKey(cons,fecha,fi));
   const getReserva=(cons,fecha,fi)=>agendaIndex.reservaSlots.get(slotKey(cons,fecha,fi));
   const isTempId=id=>String(id||"").startsWith("temp_");
+  const isSyncing=id=>isTempId(id)||syncingIds.includes(String(id));
+  const beginSync=id=>{
+    const key=String(id);
+    pendingMoveIdsRef.current.add(key);
+    setSyncingIds(prev=>prev.includes(key)?prev:[...prev,key]);
+  };
+  const endSync=id=>{
+    const key=String(id);
+    pendingMoveIdsRef.current.delete(key);
+    setSyncingIds(prev=>prev.filter(x=>x!==key));
+  };
   const markLocalChange=()=>{dataVersionRef.current+=1;return dataVersionRef.current;};
   const normalizeReservas=items=>Array.from(new Map(items.map(x=>[x.id,{...x,franja:Number(x.franja),duracion:Number(x.duracion),consultorio:Number(x.consultorio)}])).values());
   const normalizeBloqueos=items=>Array.from(new Map(items.map(x=>[x.id,{...x,franja:Number(x.franja),duracion:Number(x.duracion),consultorio:x.consultorio==="todos"?"todos":Number(x.consultorio)}])).values());
@@ -236,10 +250,13 @@ function App(){
 
   // CRUD reservas
   const handleSave=async()=>{
+    if(formActionInFlightRef.current)return;
     const fi=Number(form.franjaInicio),ff=Number(form.franjaFin);
     if(ff<=fi){setConflict(true);return;}
     const dur=(ff-fi)*30;
     if(hasConflictLocal(modal.consultorio,modal.fecha,fi,dur)){setConflict(true);return;}
+    formActionInFlightRef.current=true;
+    setLoading(true);
     const targetUserId=(isAdmin&&form.profesionalId)?form.profesionalId:currentUser.id;
     const tempId="temp_"+Date.now();
     const nueva={id:tempId,consultorio:modal.consultorio,userId:targetUserId,fecha:modal.fecha,franja:fi,duracion:dur,nota:form.nota,tipo:"normal",estado:"confirmada"};
@@ -251,12 +268,16 @@ function App(){
       if(d.ok){setReservas(prev=>prev.map(r=>r.id===tempId?{...r,id:d.id}:r));fetchAll(token);}
       else{setError(d.error);setReservas(prev=>prev.filter(r=>r.id!==tempId));}
     }catch{setError("Error al guardar.");setReservas(prev=>prev.filter(r=>r.id!==tempId));}
+    finally{formActionInFlightRef.current=false;setLoading(false);}
   };
   const handleUpdate=async()=>{
+    if(formActionInFlightRef.current)return;
     const fi=Number(form.franjaInicio),ff=Number(form.franjaFin);
     if(ff<=fi){setConflict(true);return;}
     const dur=(ff-fi)*30;
     if(hasConflictLocal(modal.consultorio,modal.fecha,fi,dur,modal.reserva.id)){setConflict(true);return;}
+    formActionInFlightRef.current=true;
+    setLoading(true);
     markLocalChange();
     setReservas(prev=>prev.map(r=>r.id===modal.reserva.id?{...r,duracion:dur,nota:form.nota}:r));
     setModal(null);showToast("Reserva actualizada");
@@ -264,10 +285,12 @@ function App(){
       const d=await api({action:"editarReserva",token,id:modal.reserva.id,duracion:dur,nota:form.nota});
       if(!d.ok){setError(d.error);fetchAll(token);}
     }catch{setError("Error al actualizar.");fetchAll(token);}
+    finally{formActionInFlightRef.current=false;setLoading(false);}
   };
   const handleEstado=async(id,estado)=>{
-    if(isTempId(id)){setError("La reserva aún se está sincronizando. Intenta de nuevo en unos segundos.");fetchAll(token);return;}
+    if(isSyncing(id)){setError("La reserva aún se está sincronizando. Intenta de nuevo en unos segundos.");fetchAll(token);return;}
     const previous=reservas.find(r=>r.id===id);
+    beginSync(id);
     markLocalChange();
     setReservas(prev=>prev.map(r=>r.id===id?{...r,estado}:r));
     setModal(null);
@@ -277,10 +300,12 @@ function App(){
       if(d.ok) fetchAll(token);
       else{if(previous)setReservas(prev=>prev.map(r=>r.id===id?previous:r));setError(d.error);fetchAll(token);}
     }catch{if(previous)setReservas(prev=>prev.map(r=>r.id===id?previous:r));setError("Error.");fetchAll(token);}
+    finally{endSync(id);}
   };
   const handleDelete=async(id)=>{
-    if(isTempId(id)){setError("La reserva aún se está sincronizando. Intenta de nuevo en unos segundos.");fetchAll(token);return;}
+    if(isSyncing(id)){setError("La reserva aún se está sincronizando. Intenta de nuevo en unos segundos.");fetchAll(token);return;}
     const previous=reservas.find(r=>r.id===id);
+    beginSync(id);
     markLocalChange();
     setReservas(prev=>prev.filter(r=>r.id!==id));
     setModal(null);
@@ -290,21 +315,26 @@ function App(){
       if(d.ok) fetchAll(token);
       else{if(previous)setReservas(prev=>prev.some(r=>r.id===id)?prev:[...prev,previous]);setError(d.error);fetchAll(token);}
     }catch{if(previous)setReservas(prev=>prev.some(r=>r.id===id)?prev:[...prev,previous]);setError("Error.");fetchAll(token);}
+    finally{endSync(id);}
   };
 
   // Drag & drop
-  const onDragStart=(e,type,id)=>{setDragItem({type,id});e.dataTransfer.effectAllowed="move";};
+  const onDragStart=(e,type,id)=>{
+    if(isSyncing(id)){e.preventDefault();setError("Ese elemento aún se está guardando.");return;}
+    setDragItem({type,id});e.dataTransfer.effectAllowed="move";
+  };
   const onDragOver=e=>{e.preventDefault();const cls=dragItem?.type==="bloqueo"?"drop-target-blocked":"drop-target";e.currentTarget.classList.add(cls);};
   const onDragLeave=e=>{e.currentTarget.classList.remove("drop-target","drop-target-blocked");};
   const onDrop=async(e,cons,fecha,fi)=>{
     e.preventDefault();e.currentTarget.classList.remove("drop-target","drop-target-blocked");
     if(!dragItem)return;
-    if(isTempId(dragItem.id)){setError("Este elemento aún se está sincronizando. Intenta de nuevo en unos segundos.");setDragItem(null);fetchAll(token);return;}
-    if(pendingMoveIdsRef.current.has(dragItem.id)){setError("Ese movimiento aún se está guardando.");setDragItem(null);return;}
-    pendingMoveIdsRef.current.add(dragItem.id);
+    if(isSyncing(dragItem.id)){setError("Este elemento aún se está sincronizando. Intenta de nuevo en unos segundos.");setDragItem(null);fetchAll(token);return;}
+    beginSync(dragItem.id);
     if(dragItem.type==="reserva"){
       const r=reservas.find(x=>x.id===dragItem.id);
-      if(!r||r.consultorio===cons&&r.fecha===fecha&&r.franja===fi){pendingMoveIdsRef.current.delete(dragItem.id);setDragItem(null);return;}
+      if(!r||r.consultorio===cons&&r.fecha===fecha&&r.franja===fi){endSync(dragItem.id);setDragItem(null);return;}
+      if(isBlocked(cons,fecha,fi)){setError("Franja bloqueada");endSync(dragItem.id);setDragItem(null);return;}
+      if(hasConflictLocal(cons,fecha,fi,r.duracion,r.id)){setError("Conflicto de horario");endSync(dragItem.id);setDragItem(null);return;}
       // Optimista
       markLocalChange();
       setReservas(prev=>prev.map(x=>x.id===dragItem.id?{...x,consultorio:cons,fecha,franja:fi}:x));
@@ -313,7 +343,7 @@ function App(){
         const d=await api({action:"moverReserva",token,id:dragItem.id,consultorio:cons,fecha,franja:fi});
         if(!d.ok){setError(d.error);fetchAll(token);}
       }catch{setError("Error al mover.");fetchAll(token);}
-      finally{pendingMoveIdsRef.current.delete(dragItem.id);}
+      finally{endSync(dragItem.id);}
     } else {
       const b=bloqueos.find(x=>x.id===dragItem.id);
       if(b){
@@ -323,33 +353,18 @@ function App(){
         try{
           const d=await api({action:"moverBloqueo",token,id:b.id,consultorio:cons,fecha,franja:fi});
           if(!d.ok){
-            if(d.error==="Acción no reconocida"){
-              const del=await api({action:"eliminarBloqueo",token,id:b.id});
-              if(del.ok){
-                const creado=await api({action:"crearBloqueo",token,consultorio:cons,fecha,franja:fi,duracion:b.duracion,nota:b.nota,repeticion:b.repeticion});
-                if(creado.ok){setBloqueos(prev=>prev.map(x=>x.id===b.id?{...x,id:creado.id}:x));fetchAll(token);setDragItem(null);return;}
-                setError(creado.error);
-              }else{
-                setError(del.error);
-              }
-              setBloqueos(prev=>prev.map(x=>x.id===b.id?b:x));
-              fetchAll(token);
-              pendingMoveIdsRef.current.delete(b.id);
-              setDragItem(null);
-              return;
-            }
             setBloqueos(prev=>prev.map(x=>x.id===b.id?b:x));
             setError(d.error);
             fetchAll(token);
-            pendingMoveIdsRef.current.delete(b.id);
+            endSync(b.id);
             setDragItem(null);
             return;
           }
           fetchAll(token);
         }catch{setError("Error al mover bloqueo.");fetchAll(token);}
-        finally{pendingMoveIdsRef.current.delete(b.id);}
+        finally{endSync(b.id);}
       }else{
-        pendingMoveIdsRef.current.delete(dragItem.id);
+        endSync(dragItem.id);
       }
     }
     setDragItem(null);
@@ -357,12 +372,14 @@ function App(){
 
   // Copiar/pegar
   const handleCopy=(type,item)=>{
-    if(isTempId(item?.id)){setError("Este elemento aún se está sincronizando. Intenta de nuevo en unos segundos.");fetchAll(token);return;}
+    if(isSyncing(item?.id)){setError("Este elemento aún se está sincronizando. Intenta de nuevo en unos segundos.");fetchAll(token);return;}
     setClipboard({type,item});showToast(`${type==="bloqueo"?"Bloqueo":"Reserva"} copiado — clic en celda destino`);
   };
   const handlePaste=async(cons,fecha,fi)=>{
     if(!clipboard)return;
-    if(isTempId(clipboard.item?.id)){setClipboard(null);setError("El elemento copiado aún se estaba sincronizando. Intenta copiarlo de nuevo.");fetchAll(token);return;}
+    if(pasteInFlightRef.current)return;
+    if(isSyncing(clipboard.item?.id)){setClipboard(null);setError("El elemento copiado aún se estaba sincronizando. Intenta copiarlo de nuevo.");fetchAll(token);return;}
+    pasteInFlightRef.current=true;
     setLoading(true);
     try{
       if(clipboard.type==="reserva"){
@@ -374,13 +391,16 @@ function App(){
         if(d.ok){await fetchAll(token);setClipboard(null);showToast("Bloqueo pegado");}else setError(d.error);
       }
     }catch{setError("Error al pegar.");}
-    setLoading(false);
+    finally{pasteInFlightRef.current=false;setLoading(false);}
   };
 
   // Bloqueos
   const handleCrearBloqueo=async()=>{
+    if(formActionInFlightRef.current)return;
     const fi=Number(bForm.franjaInicio),ff=Number(bForm.franjaFin);
     if(ff<=fi)return;
+    formActionInFlightRef.current=true;
+    setLoading(true);
     const dur=(ff-fi)*30;
     const tempId="temp_b_"+Date.now();
     const nuevo={id:tempId,consultorio:bForm.consultorio==="todos"?"todos":Number(bForm.consultorio),fecha:bloqueoModal.fecha,franja:fi,duracion:dur,nota:bForm.nota,repeticion:bForm.repeticion};
@@ -393,10 +413,12 @@ function App(){
       if(d.ok){setBloqueos(prev=>prev.map(b=>b.id===tempId?{...b,id:d.id}:b));fetchAll(token);}
       else{setBloqueos(prev=>prev.filter(b=>b.id!==tempId));setError(d.error);fetchAll(token);}
     }catch{setBloqueos(prev=>prev.filter(b=>b.id!==tempId));setError("Error.");fetchAll(token);}
+    finally{formActionInFlightRef.current=false;setLoading(false);}
   };
   const handleEliminarBloqueo=async(id)=>{
-    if(isTempId(id)){setError("El bloqueo aún se está sincronizando. Intenta de nuevo en unos segundos.");fetchAll(token);return;}
+    if(isSyncing(id)){setError("El bloqueo aún se está sincronizando. Intenta de nuevo en unos segundos.");fetchAll(token);return;}
     const previous=bloqueos.find(b=>b.id===id);
+    beginSync(id);
     markLocalChange();
     setBloqueos(prev=>prev.filter(b=>b.id!==id));
     setBloqueoModal(null);
@@ -406,6 +428,7 @@ function App(){
       if(d.ok) fetchAll(token);
       else{if(previous)setBloqueos(prev=>prev.some(b=>b.id===id)?prev:[...prev,previous]);setError(d.error);fetchAll(token);}
     }catch{if(previous)setBloqueos(prev=>prev.some(b=>b.id===id)?prev:[...prev,previous]);setError("Error.");fetchAll(token);}
+    finally{endSync(id);}
   };
 
   const openCell=(cons,fecha,fi)=>{
@@ -461,8 +484,9 @@ function App(){
       const isRS=r&&r.franja===fi;
       const cancelled=r?.estado==="cancelada";
       const color=r?getUserColor(r.userId):null;
-      const canDragR=r&&!isTempId(r.id)&&(isAdmin||currentUser.id===r.userId);
-      const canDragB=bloqueo&&isBS&&!isTempId(bloqueo.id)&&isAdmin;
+      const syncing=isSyncing(r?.id)||isSyncing(bloqueo?.id);
+      const canDragR=r&&!isSyncing(r.id)&&(isAdmin||currentUser.id===r.userId);
+      const canDragB=bloqueo&&isBS&&!isSyncing(bloqueo.id)&&isAdmin;
       const isPaste=!!clipboard;
 
       return(
@@ -475,11 +499,12 @@ function App(){
             cursor:blocked&&!isAdmin?"not-allowed":isPaste?"copy":canDragR||canDragB?"grab":"pointer",
             background:blocked?"var(--blocked)":cancelled?"var(--cancelled)":r?color+"25":"#fff",
             borderTop:isRS&&!cancelled?`2px solid ${color}`:isBS?"2px solid var(--blocked-border)":"none",
-            opacity:cancelled?0.65:1,verticalAlign:"middle",userSelect:"none",overflow:"hidden"}}>
+            opacity:syncing?0.45:cancelled?0.65:1,verticalAlign:"middle",userSelect:"none",overflow:"hidden"}}>
           {isRS&&<div style={{fontSize:10,lineHeight:"12px",color:cancelled?"#999":"var(--navy)",fontWeight:700,overflow:"hidden",whiteSpace:"nowrap",textOverflow:"ellipsis",textDecoration:cancelled?"line-through":"none"}}>
             {cancelled?"✗ ":""}{getUserName(r.userId)}
           </div>}
           {isBS&&!r&&<div style={{fontSize:10,lineHeight:"12px",color:"#8a6500",fontWeight:700,overflow:"hidden",whiteSpace:"nowrap",textOverflow:"ellipsis"}}>🔒 {bloqueo.nota||"Bloqueo"}</div>}
+          {syncing&&<div style={{fontSize:9,lineHeight:"11px",color:"var(--muted)",fontWeight:600,whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis"}}>Guardando…</div>}
         </td>
       );
     };
@@ -539,8 +564,9 @@ function App(){
     const isRS=r&&r.franja===fi;
     const cancelled=r?.estado==="cancelada";
     const color=r?getUserColor(r.userId):null;
-    const canDragR=r&&!isTempId(r.id)&&(isAdmin||currentUser.id===r.userId);
-    const canDragB=bloqueo&&!isTempId(bloqueo.id)&&isAdmin;
+    const syncing=isSyncing(r?.id)||isSyncing(bloqueo?.id);
+    const canDragR=r&&!isSyncing(r.id)&&(isAdmin||currentUser.id===r.userId);
+    const canDragB=bloqueo&&!isSyncing(bloqueo.id)&&isAdmin;
     const isPaste=!!clipboard;
 
     return(
@@ -552,11 +578,12 @@ function App(){
           cursor:blocked&&!isAdmin?"not-allowed":isPaste?"copy":canDragR||canDragB?"grab":"pointer",
           background:blocked?"var(--blocked)":cancelled?"var(--cancelled)":r?color+"18":"transparent",
           borderTop:isRS&&!cancelled?`2px solid ${color}`:isBS?"2px solid var(--blocked-border)":"none",
-          opacity:cancelled?0.65:1,verticalAlign:"middle",userSelect:"none"}}>
+          opacity:syncing?0.45:cancelled?0.65:1,verticalAlign:"middle",userSelect:"none"}}>
         {isRS&&<div style={{fontSize:compact?7:9,color:cancelled?"var(--cancelled-text)":"var(--navy)",fontWeight:600,overflow:"hidden",whiteSpace:"nowrap",textOverflow:"ellipsis",textDecoration:cancelled?"line-through":"none"}}>
           {cancelled?"✗ ":""}{getUserName(r.userId)}
         </div>}
         {isBS&&!r&&<div style={{fontSize:compact?7:9,color:"#8a6500",fontWeight:600,overflow:"hidden",whiteSpace:"nowrap"}}>🔒{bloqueo.nota?` ${bloqueo.nota.slice(0,8)}`:""}</div>}
+        {syncing&&!compact&&<div style={{fontSize:8,color:"var(--muted)",fontWeight:600,whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis"}}>Guardando…</div>}
       </td>
     );
   };
@@ -645,8 +672,9 @@ function App(){
                         const isRS=r&&r.franja===fi;
                         const cancelled=r?.estado==="cancelada";
                         const color=r?getUserColor(r.userId):null;
-                        const canDragR=r&&!isTempId(r.id)&&(isAdmin||currentUser.id===r.userId);
-                        const canDragB=bloqueo&&isBS&&!isTempId(bloqueo.id)&&isAdmin;
+                        const syncing=isSyncing(r?.id)||isSyncing(bloqueo?.id);
+                        const canDragR=r&&!isSyncing(r.id)&&(isAdmin||currentUser.id===r.userId);
+                        const canDragB=bloqueo&&isBS&&!isSyncing(bloqueo.id)&&isAdmin;
                         const isPaste=!!clipboard;
                         return(
                           <td key={`${di}-${ci}`}
@@ -660,9 +688,10 @@ function App(){
                               cursor:blocked&&!isAdmin?"not-allowed":isPaste?"copy":canDragR||canDragB?"grab":"pointer",
                               background:blocked?"var(--blocked)":cancelled?"var(--cancelled)":r?color+"25":"transparent",
                               borderTop:isRS&&!cancelled?`2px solid ${color}`:isBS?"2px solid var(--blocked-border)":"none",
-                              opacity:cancelled?0.65:1,verticalAlign:"middle",userSelect:"none",overflow:"hidden"}}>
+                              opacity:syncing?0.45:cancelled?0.65:1,verticalAlign:"middle",userSelect:"none",overflow:"hidden"}}>
                 {isRS&&<div style={{fontSize:10,color:cancelled?"#999":"var(--navy)",fontWeight:700,overflow:"hidden",whiteSpace:"nowrap",textOverflow:"ellipsis",textDecoration:cancelled?"line-through":"none",paddingLeft:2}}>{cancelled?"✗ ":""}{getUserName(r.userId)}</div>}
                             {isBS&&!r&&<div style={{fontSize:10,color:"#8a6500",fontWeight:600}}>🔒</div>}
+                            {syncing&&<div style={{fontSize:9,color:"var(--muted)",fontWeight:600,whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis"}}>Guardando…</div>}
                           </td>
                         );
                       });
@@ -761,15 +790,16 @@ function App(){
           {misReservas.length===0&&<p style={s.muted}>No tienes reservas registradas.</p>}
           {misReservas.map(r=>{
             const cancelled=r.estado==="cancelada";
+            const syncing=isSyncing(r.id);
             return(
-              <div key={r.id} style={{...s.card,marginBottom:8,display:"flex",justifyContent:"space-between",alignItems:"center",borderLeft:`3px solid ${cancelled?"#ccc":getUserColor(r.userId)}`,opacity:cancelled?0.7:1}}>
+              <div key={r.id} style={{...s.card,marginBottom:8,display:"flex",justifyContent:"space-between",alignItems:"center",borderLeft:`3px solid ${cancelled?"#ccc":getUserColor(r.userId)}`,opacity:syncing?0.5:cancelled?0.7:1}}>
                 <div>
                   <div style={{fontWeight:600,fontSize:13,color:"var(--navy)",textDecoration:cancelled?"line-through":"none"}}>{CONS[r.consultorio]} · {FRANJAS[r.franja]} – {FRANJAS[r.franja+r.duracion/30]||"18:00"}</div>
-                  <div style={s.muted}>{r.fecha}{r.nota?` · ${r.nota}`:""}{cancelled?" · CANCELADA":""}{r.tipo==="preestablecida"?" · (fija)":""}</div>
+                  <div style={s.muted}>{r.fecha}{r.nota?` · ${r.nota}`:""}{cancelled?" · CANCELADA":""}{r.tipo==="preestablecida"?" · (fija)":""}{syncing?" · Guardando…":""}</div>
                 </div>
                 <div style={{display:"flex",gap:6,flexShrink:0}}>
-                  {!cancelled&&<button onClick={()=>handleEstado(r.id,"cancelada")} style={{fontSize:11,color:"var(--danger)",background:"var(--danger-bg)",border:"1px solid #f5c6c0"}}>✗ Cancelar</button>}
-                  {cancelled&&<button onClick={()=>handleDelete(r.id)} style={{fontSize:11,color:"var(--muted)",background:"#f5f5f5",border:"1px solid #ddd"}}>🗑 Eliminar</button>}
+                  {!cancelled&&<button onClick={()=>handleEstado(r.id,"cancelada")} disabled={syncing} style={{fontSize:11,color:"var(--danger)",background:"var(--danger-bg)",border:"1px solid #f5c6c0"}}>✗ Cancelar</button>}
+                  {cancelled&&<button onClick={()=>handleDelete(r.id)} disabled={syncing} style={{fontSize:11,color:"var(--muted)",background:"#f5f5f5",border:"1px solid #ddd"}}>🗑 Eliminar</button>}
                 </div>
               </div>
             );
@@ -786,16 +816,17 @@ function App(){
           </div>
           {todasReservas.map(r=>{
             const u=allUsers.find(x=>x.id===r.userId);const color=getUserColor(r.userId);const cancelled=r.estado==="cancelada";
+            const syncing=isSyncing(r.id);
             return(
-              <div key={r.id} style={{...s.card,borderLeft:`3px solid ${cancelled?"#ccc":color}`,marginBottom:8,display:"flex",justifyContent:"space-between",alignItems:"center",opacity:cancelled?0.7:1}}>
+              <div key={r.id} style={{...s.card,borderLeft:`3px solid ${cancelled?"#ccc":color}`,marginBottom:8,display:"flex",justifyContent:"space-between",alignItems:"center",opacity:syncing?0.5:cancelled?0.7:1}}>
                 <div style={{flex:1}}>
                   <div style={{fontWeight:600,fontSize:13,color:"var(--navy)",textDecoration:cancelled?"line-through":"none"}}>{CONS[r.consultorio]} · {FRANJAS[r.franja]} – {FRANJAS[r.franja+r.duracion/30]||"18:00"}</div>
-                  <div style={s.muted}>{r.fecha} · {u?.nombre||r.userId}{r.nota?` · ${r.nota}`:""}{r.tipo==="preestablecida"?" · (fija)":""}{cancelled?" · CANCELADA":""}</div>
+                  <div style={s.muted}>{r.fecha} · {u?.nombre||r.userId}{r.nota?` · ${r.nota}`:""}{r.tipo==="preestablecida"?" · (fija)":""}{cancelled?" · CANCELADA":""}{syncing?" · Guardando…":""}</div>
                 </div>
                 <div style={{display:"flex",gap:6,flexShrink:0}}>
-                  {isAdmin&&!cancelled&&<button onClick={()=>handleEstado(r.id,"cancelada")} style={{fontSize:11,color:"var(--danger)",background:"var(--danger-bg)",border:"1px solid #f5c6c0"}}>✗</button>}
-                  {isAdmin&&cancelled&&<button onClick={()=>handleEstado(r.id,"confirmada")} style={{fontSize:11,color:"var(--success)",background:"var(--success-bg)",border:"1px solid #9fe1cb"}}>✓</button>}
-                  {isAdmin&&cancelled&&<button onClick={()=>handleDelete(r.id)} style={{fontSize:11,color:"var(--muted)",background:"#f5f5f5",border:"1px solid #ddd"}}>🗑</button>}
+                  {isAdmin&&!cancelled&&<button onClick={()=>handleEstado(r.id,"cancelada")} disabled={syncing} style={{fontSize:11,color:"var(--danger)",background:"var(--danger-bg)",border:"1px solid #f5c6c0"}}>✗</button>}
+                  {isAdmin&&cancelled&&<button onClick={()=>handleEstado(r.id,"confirmada")} disabled={syncing} style={{fontSize:11,color:"var(--success)",background:"var(--success-bg)",border:"1px solid #9fe1cb"}}>✓</button>}
+                  {isAdmin&&cancelled&&<button onClick={()=>handleDelete(r.id)} disabled={syncing} style={{fontSize:11,color:"var(--muted)",background:"#f5f5f5",border:"1px solid #ddd"}}>🗑</button>}
                 </div>
               </div>
             );
@@ -860,17 +891,17 @@ function App(){
                 <input value={form.nota} onChange={e=>setForm(f=>({...f,nota:e.target.value}))} style={{marginBottom:12}}/>
                 {conflict&&<div style={{fontSize:12,color:"var(--danger)",marginBottom:8}}>Conflicto de horario.</div>}
                 <div style={{display:"flex",gap:6,justifyContent:"flex-end",flexWrap:"wrap"}}>
-                  {(isAdmin||currentUser.id===modal.reserva.userId)&&modal.reserva.estado!=="cancelada"&&<button onClick={()=>handleEstado(modal.reserva.id,"cancelada")} style={{fontSize:11,color:"var(--danger)",background:"var(--danger-bg)",border:"1px solid #f5c6c0"}}>✗ Cancelar</button>}
-                  <button onClick={()=>handleCopy("reserva",modal.reserva)} style={{fontSize:11}}>📋 Copiar</button>
+                  {(isAdmin||currentUser.id===modal.reserva.userId)&&modal.reserva.estado!=="cancelada"&&<button onClick={()=>handleEstado(modal.reserva.id,"cancelada")} disabled={isSyncing(modal.reserva.id)} style={{fontSize:11,color:"var(--danger)",background:"var(--danger-bg)",border:"1px solid #f5c6c0"}}>✗ Cancelar</button>}
+                  <button onClick={()=>handleCopy("reserva",modal.reserva)} disabled={isSyncing(modal.reserva.id)} style={{fontSize:11}}>📋 Copiar</button>
                   <button onClick={()=>setModal(null)} style={{color:"var(--muted)"}}>Cerrar</button>
                   <button onClick={handleUpdate} disabled={loading} style={{background:"var(--navy)",color:"#fff",border:"none"}}>Guardar</button>
                 </div>
               </>):(<>
                 <div style={{fontSize:13,marginBottom:12}}><span style={{color:"var(--muted)"}}>Nota: </span>{modal.reserva.nota||"—"}</div>
                 <div style={{display:"flex",gap:6,justifyContent:"flex-end",flexWrap:"wrap"}}>
-                  {isAdmin&&modal.reserva.estado==="cancelada"&&<button onClick={()=>handleEstado(modal.reserva.id,"confirmada")} style={{fontSize:11,color:"var(--success)",background:"var(--success-bg)",border:"1px solid #9fe1cb"}}>✓ Reconfirmar</button>}
-                  {isAdmin&&modal.reserva.estado==="cancelada"&&<button onClick={()=>handleDelete(modal.reserva.id)} style={{fontSize:11,color:"var(--muted)",background:"#f5f5f5",border:"1px solid #ddd"}}>🗑 Eliminar</button>}
-                  <button onClick={()=>handleCopy("reserva",modal.reserva)} style={{fontSize:11}}>📋 Copiar</button>
+                  {isAdmin&&modal.reserva.estado==="cancelada"&&<button onClick={()=>handleEstado(modal.reserva.id,"confirmada")} disabled={isSyncing(modal.reserva.id)} style={{fontSize:11,color:"var(--success)",background:"var(--success-bg)",border:"1px solid #9fe1cb"}}>✓ Reconfirmar</button>}
+                  {isAdmin&&modal.reserva.estado==="cancelada"&&<button onClick={()=>handleDelete(modal.reserva.id)} disabled={isSyncing(modal.reserva.id)} style={{fontSize:11,color:"var(--muted)",background:"#f5f5f5",border:"1px solid #ddd"}}>🗑 Eliminar</button>}
+                  <button onClick={()=>handleCopy("reserva",modal.reserva)} disabled={isSyncing(modal.reserva.id)} style={{fontSize:11}}>📋 Copiar</button>
                   <button onClick={()=>setModal(null)}>Cerrar</button>
                 </div>
               </>)}
@@ -924,8 +955,8 @@ function App(){
               <div style={{fontSize:13,marginBottom:4}}><span style={{color:"var(--muted)"}}>Repetición: </span>{bloqueoModal.bloqueo.repeticion==="semanal"?"Semanal":"Sin repetición"}</div>
               <div style={{fontSize:13,marginBottom:16}}><span style={{color:"var(--muted)"}}>Nota: </span>{bloqueoModal.bloqueo.nota||"—"}</div>
               <div style={{display:"flex",gap:8,justifyContent:"flex-end"}}>
-                <button onClick={()=>handleCopy("bloqueo",bloqueoModal.bloqueo)} style={{fontSize:11}}>📋 Copiar</button>
-                <button onClick={()=>handleEliminarBloqueo(bloqueoModal.bloqueo.id)} style={{color:"var(--danger)",background:"var(--danger-bg)",border:"1px solid #f5c6c0"}}>Eliminar</button>
+                <button onClick={()=>handleCopy("bloqueo",bloqueoModal.bloqueo)} disabled={isSyncing(bloqueoModal.bloqueo.id)} style={{fontSize:11}}>📋 Copiar</button>
+                <button onClick={()=>handleEliminarBloqueo(bloqueoModal.bloqueo.id)} disabled={isSyncing(bloqueoModal.bloqueo.id)} style={{color:"var(--danger)",background:"var(--danger-bg)",border:"1px solid #f5c6c0"}}>Eliminar</button>
                 <button onClick={()=>setBloqueoModal(null)} style={{color:"var(--muted)"}}>Cerrar</button>
               </div>
             </>)}
