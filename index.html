@@ -26,6 +26,11 @@ button:hover{background:var(--cyan-light);}
 button:disabled{opacity:0.5;cursor:default;}
 .drop-target{outline:2px dashed var(--cyan)!important;background:var(--cyan-light)!important;}
 .drop-target-blocked{outline:2px dashed var(--blocked-border)!important;background:var(--blocked)!important;}
+@media(max-width:720px){
+  #root{padding:0.75rem;}
+  button{min-height:42px;padding:9px 12px;}
+  input,select{min-height:42px;font-size:16px;}
+}
 </style>
 </head>
 <body>
@@ -476,6 +481,9 @@ function App(){
     card:{background:"var(--white)",border:"1px solid var(--border)",borderRadius:12,padding:"1rem 1.25rem"},
     label:{fontSize:12,color:"var(--muted)",display:"block",marginBottom:4},
     muted:{fontSize:12,color:"var(--muted)"},
+    modalBackdrop:{position:"fixed",inset:0,background:"rgba(0,0,0,0.35)",display:"flex",alignItems:isMobile?"flex-end":"center",justifyContent:"center",zIndex:100,padding:isMobile?8:16},
+    modalCard:{background:"var(--white)",border:"1px solid var(--border)",borderRadius:12,padding:"1rem 1.25rem",width:"100%",maxWidth:420,maxHeight:isMobile?"calc(100vh - 16px)":"calc(100vh - 32px)",overflowY:"auto",WebkitOverflowScrolling:"touch"},
+    modalActions:{display:"flex",gap:8,justifyContent:"flex-end",flexWrap:"wrap",position:"sticky",bottom:-16,background:"var(--white)",paddingTop:10,marginTop:8}
   };
 
   const NavSemana=()=>(
@@ -496,6 +504,7 @@ function App(){
     const d=weekDates[mobileDia]||weekDates[0];
     const fecha=dateKey(d);
     const isSat=mobileDia===5;
+    const goMobileDia=delta=>setMobileDia(v=>Math.min(5,Math.max(0,v+delta)));
 
     const MobileCell=({ci,fi})=>{
       if(isSat&&fi>=8)return <td style={{background:"#eef3f6",borderBottom:"1px solid var(--border)",borderLeft:"1px solid var(--border)"}}></td>;
@@ -518,7 +527,7 @@ function App(){
           draggable={!!(canDragR||canDragB)}
           onDragStart={canDragR?e=>onDragStart(e,"reserva",r.id):canDragB?e=>onDragStart(e,"bloqueo",bloqueo.id):undefined}
           onDragOver={onDragOver} onDragLeave={onDragLeave} onDrop={e=>onDrop(e,ci,fecha,fi)}
-          style={{padding:"4px 3px",height:40,borderBottom:"1px solid var(--border)",borderLeft:"1px solid var(--border)",
+          style={{padding:"5px 3px",height:46,borderBottom:"1px solid var(--border)",borderLeft:"1px solid var(--border)",
             cursor:blocked&&!isAdmin?"not-allowed":isPaste?"copy":canDragR||canDragB?"grab":"pointer",
             background:blocked?"var(--blocked)":cancelled?"var(--cancelled)":r?color+"25":"#fff",
             borderTop:isRS&&!cancelled?`2px solid ${color}`:isBS?"2px solid var(--blocked-border)":"none",
@@ -534,13 +543,20 @@ function App(){
 
     return(
       <div>
+        <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",gap:8,marginBottom:8}}>
+          <button onClick={()=>goMobileDia(-1)} disabled={mobileDia===0} style={{fontSize:18,padding:"6px 12px"}}>←</button>
+          <div style={{fontWeight:700,fontSize:15,color:"var(--navy)",textAlign:"center",lineHeight:"18px"}}>
+            {DIAS_FULL[mobileDia]}<br/><span style={{fontSize:12,color:"var(--muted)",fontWeight:500}}>{fmt(d)}</span>
+          </div>
+          <button onClick={()=>goMobileDia(1)} disabled={mobileDia===5} style={{fontSize:18,padding:"6px 12px"}}>→</button>
+        </div>
         <div style={{display:"grid",gridTemplateColumns:"repeat(3,1fr)",gap:6,marginBottom:10}}>
           {weekDates.map((dia,idx)=>{
             const selected=idx===mobileDia;
             const isToday=dateKey(dia)===dateKey(new Date());
             return(
               <button key={idx} onClick={()=>setMobileDia(idx)}
-                style={{fontSize:12,padding:"8px 6px",background:selected?"var(--navy)":isToday?"var(--cyan-light)":"#fff",
+                style={{fontSize:12,padding:"8px 6px",minHeight:44,background:selected?"var(--navy)":isToday?"var(--cyan-light)":"#fff",
                   color:selected?"#fff":"var(--navy)",border:`1px solid ${selected?"var(--navy)":"var(--border)"}`,fontWeight:selected?700:500}}>
                 {DIAS[idx]} {fmt(dia)}
               </button>
@@ -548,15 +564,12 @@ function App(){
           })}
         </div>
         <div style={{...s.card,padding:"0.75rem",marginBottom:10}}>
-          <div style={{fontWeight:700,fontSize:14,marginBottom:8,color:"var(--navy)"}}>
-            {DIAS_FULL[mobileDia]} {fmt(d)}
-          </div>
-          <div style={{overflowX:"hidden"}}>
-            <table style={{width:"100%",borderCollapse:"collapse",tableLayout:"fixed",fontSize:11}}>
+          <div style={{overflowX:"auto",WebkitOverflowScrolling:"touch"}}>
+            <table style={{width:"100%",minWidth:330,borderCollapse:"collapse",tableLayout:"fixed",fontSize:11}}>
               <thead>
                 <tr>
-                  <th style={{width:46,padding:"6px 2px",fontSize:10,color:"var(--muted)",background:"var(--cyan-light)",borderBottom:"2px solid var(--border)",borderRight:"1px solid var(--border)"}}>Hora</th>
-                  {CONS.map((c,ci)=><th key={ci} style={{padding:"6px 1px",fontSize:10,fontWeight:700,color:"#fff",background:CONS_COLORS[ci],borderBottom:"2px solid var(--border)",borderLeft:"1px solid var(--border)"}}>C{ci+1}</th>)}
+                  <th style={{width:50,padding:"7px 2px",fontSize:10,color:"var(--muted)",background:"var(--cyan-light)",borderBottom:"2px solid var(--border)",borderRight:"1px solid var(--border)"}}>Hora</th>
+                  {CONS.map((c,ci)=><th key={ci} style={{padding:"7px 1px",fontSize:10,fontWeight:700,color:"#fff",background:CONS_COLORS[ci],borderBottom:"2px solid var(--border)",borderLeft:"1px solid var(--border)"}}>C{ci+1}</th>)}
                 </tr>
               </thead>
               <tbody>
@@ -953,8 +966,8 @@ function App(){
 
       {/* MODAL RESERVA */}
       {modal&&(
-        <div style={{position:"fixed",inset:0,background:"rgba(0,0,0,0.35)",display:"flex",alignItems:"center",justifyContent:"center",zIndex:100,padding:16}}>
-          <div style={{...s.card,width:"100%",maxWidth:420}}>
+        <div style={s.modalBackdrop}>
+          <div style={s.modalCard}>
             {modal.mode==="nueva"&&(<>
               <div style={{fontWeight:600,fontSize:15,marginBottom:4,color:"var(--navy)"}}>Nueva reserva</div>
               <div style={{...s.muted,marginBottom:16}}>{CONS[modal.consultorio]} · {DIAS_FULL[weekDates.findIndex(d=>dateKey(d)===modal.fecha)]||modal.fecha}</div>
@@ -977,7 +990,7 @@ function App(){
               <label style={s.label}>Nota (opcional)</label>
               <input value={form.nota} onChange={e=>setForm(f=>({...f,nota:e.target.value}))} placeholder="Nombre paciente, tipo de consulta..." style={{marginBottom:16}}/>
               {conflict&&<div style={{fontSize:12,color:"var(--danger)",marginBottom:8}}>Hora fin debe ser mayor que inicio, o hay conflicto.</div>}
-              <div style={{display:"flex",gap:8,justifyContent:"flex-end"}}>
+              <div style={s.modalActions}>
                 <button onClick={()=>setModal(null)} style={{color:"var(--muted)"}}>Cancelar</button>
                 <button onClick={handleSave} disabled={loading||(isAdmin&&!form.profesionalId)} style={{background:"var(--navy)",color:"#fff",border:"none"}}>Reservar</button>
               </div>
@@ -1007,7 +1020,7 @@ function App(){
                 <label style={s.label}>Nota</label>
                 <input value={form.nota} onChange={e=>setForm(f=>({...f,nota:e.target.value}))} style={{marginBottom:12}}/>
                 {conflict&&<div style={{fontSize:12,color:"var(--danger)",marginBottom:8}}>Conflicto de horario.</div>}
-                <div style={{display:"flex",gap:6,justifyContent:"flex-end",flexWrap:"wrap"}}>
+                <div style={s.modalActions}>
                   {(isAdmin||currentUser.id===modal.reserva.userId)&&modal.reserva.estado!=="cancelada"&&<button onClick={()=>handleEstado(modal.reserva.id,"cancelada")} disabled={isSyncing(modal.reserva.id)} style={{fontSize:11,color:"var(--danger)",background:"var(--danger-bg)",border:"1px solid #f5c6c0"}}>✗ Cancelar</button>}
                   <button onClick={()=>handleCopy("reserva",modal.reserva)} disabled={isSyncing(modal.reserva.id)} style={{fontSize:11}}>📋 Copiar</button>
                   <button onClick={()=>setModal(null)} style={{color:"var(--muted)"}}>Cerrar</button>
@@ -1015,7 +1028,7 @@ function App(){
                 </div>
               </>):(<>
                 <div style={{fontSize:13,marginBottom:12}}><span style={{color:"var(--muted)"}}>Nota: </span>{modal.reserva.nota||"—"}</div>
-                <div style={{display:"flex",gap:6,justifyContent:"flex-end",flexWrap:"wrap"}}>
+                <div style={s.modalActions}>
                   {isAdmin&&modal.reserva.estado==="cancelada"&&<button onClick={()=>handleEstado(modal.reserva.id,"confirmada")} disabled={isSyncing(modal.reserva.id)} style={{fontSize:11,color:"var(--success)",background:"var(--success-bg)",border:"1px solid #9fe1cb"}}>✓ Reconfirmar</button>}
                   {isAdmin&&modal.reserva.estado==="cancelada"&&<button onClick={()=>handleDelete(modal.reserva.id)} disabled={isSyncing(modal.reserva.id)} style={{fontSize:11,color:"var(--muted)",background:"#f5f5f5",border:"1px solid #ddd"}}>🗑 Eliminar</button>}
                   <button onClick={()=>handleCopy("reserva",modal.reserva)} disabled={isSyncing(modal.reserva.id)} style={{fontSize:11}}>📋 Copiar</button>
@@ -1029,8 +1042,8 @@ function App(){
 
       {/* MODAL BLOQUEO */}
       {bloqueoModal&&(
-        <div style={{position:"fixed",inset:0,background:"rgba(0,0,0,0.35)",display:"flex",alignItems:"center",justifyContent:"center",zIndex:100,padding:16}}>
-          <div style={{...s.card,width:"100%",maxWidth:420,borderTop:"3px solid var(--blocked-border)"}}>
+        <div style={s.modalBackdrop}>
+          <div style={{...s.modalCard,borderTop:"3px solid var(--blocked-border)"}}>
             {bloqueoModal.mode==="nuevo"&&(<>
               <div style={{fontWeight:600,fontSize:15,marginBottom:16,color:"var(--navy)"}}>🔒 Nuevo bloqueo</div>
               <label style={s.label}>Consultorio</label>
@@ -1058,7 +1071,7 @@ function App(){
               </select>
               <label style={s.label}>Nota (opcional)</label>
               <input value={bForm.nota} onChange={e=>setBForm(f=>({...f,nota:e.target.value}))} placeholder="Ej: Reunión, mantenimiento..." style={{marginBottom:16}}/>
-              <div style={{display:"flex",gap:8,justifyContent:"flex-end"}}>
+              <div style={s.modalActions}>
                 <button onClick={()=>setBloqueoModal(null)} style={{color:"var(--muted)"}}>Cancelar</button>
                 <button onClick={handleCrearBloqueo} disabled={loading} style={{background:"#8a6500",color:"#fff",border:"none"}}>Bloquear</button>
               </div>
@@ -1071,7 +1084,7 @@ function App(){
               <div style={{fontSize:13,marginBottom:4}}><span style={{color:"var(--muted)"}}>Duración: </span>{bloqueoModal.bloqueo.duracion} min</div>
               <div style={{fontSize:13,marginBottom:4}}><span style={{color:"var(--muted)"}}>Repetición: </span>{bloqueoModal.bloqueo.repeticion==="semanal"?"Semanal":"Sin repetición"}</div>
               <div style={{fontSize:13,marginBottom:16}}><span style={{color:"var(--muted)"}}>Nota: </span>{bloqueoModal.bloqueo.nota||"—"}</div>
-              <div style={{display:"flex",gap:8,justifyContent:"flex-end"}}>
+              <div style={s.modalActions}>
                 <button onClick={()=>handleCopy("bloqueo",bloqueoModal.bloqueo)} disabled={isSyncing(bloqueoModal.bloqueo.id)} style={{fontSize:11}}>📋 Copiar</button>
                 <button onClick={()=>handleEliminarBloqueo(bloqueoModal.bloqueo.id)} disabled={isSyncing(bloqueoModal.bloqueo.id)} style={{color:"var(--danger)",background:"var(--danger-bg)",border:"1px solid #f5c6c0"}}>Eliminar</button>
                 <button onClick={()=>setBloqueoModal(null)} style={{color:"var(--muted)"}}>Cerrar</button>
