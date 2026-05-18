@@ -45,10 +45,11 @@ const SESSION_KEY="psiq_v6";
 function getWeekDates(base){
   const d=new Date(base),diff=d.getDay()===0?-6:1-d.getDay(),mon=new Date(d);
   mon.setDate(d.getDate()+diff);
+  mon.setHours(0,0,0,0);
   return Array.from({length:6},(_,i)=>{const nd=new Date(mon);nd.setDate(mon.getDate()+i);return nd;});
 }
 function fmt(d){return `${String(d.getDate()).padStart(2,"0")}/${String(d.getMonth()+1).padStart(2,"0")}`;}
-function dateKey(d){return d.toISOString().slice(0,10);}
+function dateKey(d){return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,"0")}-${String(d.getDate()).padStart(2,"0")}`;}
 async function api(params){
   const u=new URL(SCRIPT_URL);
   Object.entries(params).forEach(([k,v])=>u.searchParams.set(k,String(v)));
@@ -82,6 +83,7 @@ function App(){
   const pollRef=useRef(null);
   const fetchInFlightKeyRef=useRef(null);
   const latestFetchKeyRef=useRef(null);
+  const agendaVersionRef=useRef({key:null,version:null});
 
   useEffect(()=>{
     const onResize=()=>setIsMobile(window.innerWidth<=720);
@@ -158,6 +160,7 @@ function App(){
         if(d.ok){
           setReservas(d.reservas.map(x=>({...x,franja:Number(x.franja),duracion:Number(x.duracion),consultorio:Number(x.consultorio)})));
           setBloqueos(d.bloqueos.map(x=>({...x,franja:Number(x.franja),duracion:Number(x.duracion),consultorio:x.consultorio==="todos"?"todos":Number(x.consultorio)})));
+          agendaVersionRef.current={key:fetchKey,version:d.version||null};
           return;
         }
       }
@@ -165,17 +168,38 @@ function App(){
       if(latestFetchKeyRef.current!==fetchKey)return;
       if(r.ok) setReservas(r.reservas.map(x=>({...x,franja:Number(x.franja),duracion:Number(x.duracion),consultorio:Number(x.consultorio)})));
       if(b.ok) setBloqueos(b.bloqueos.map(x=>({...x,franja:Number(x.franja),duracion:Number(x.duracion),consultorio:x.consultorio==="todos"?"todos":Number(x.consultorio)})));
+      agendaVersionRef.current={key:fetchKey,version:null};
     }catch{}finally{if(fetchInFlightKeyRef.current===fetchKey)fetchInFlightKeyRef.current=null;}
   },[token,weekStart,weekEnd,view]);
+
+  const refreshIfNeeded=useCallback(async(tkn)=>{
+    const activeToken=tkn||token;
+    const needsFullData=view==="mis reservas"||view==="todas";
+    if(needsFullData){fetchAll(activeToken);return;}
+    const fetchKey=`${activeToken}|${weekStart}|${weekEnd}`;
+    try{
+      const d=await api({action:"getAgendaVersion",token:activeToken,desde:weekStart,hasta:weekEnd});
+      if(!d.ok){fetchAll(activeToken);return;}
+      if(agendaVersionRef.current.key!==fetchKey||agendaVersionRef.current.version!==d.version){
+        fetchAll(activeToken);
+      }
+    }catch{fetchAll(activeToken);}
+  },[token,weekStart,weekEnd,view,fetchAll]);
 
   useEffect(()=>{
     if(screen==="app"&&token){
       fetchAll(token);
       const pollMs=view==="mis reservas"||view==="todas"?120000:30000;
-      pollRef.current=setInterval(()=>{if(!document.hidden)fetchAll(token);},pollMs);
+      pollRef.current=setInterval(()=>{if(!document.hidden)refreshIfNeeded(token);},pollMs);
+      const onVisibilityChange=()=>{if(!document.hidden)refreshIfNeeded(token);};
+      document.addEventListener("visibilitychange",onVisibilityChange);
+      return()=>{
+        if(pollRef.current)clearInterval(pollRef.current);
+        document.removeEventListener("visibilitychange",onVisibilityChange);
+      };
     }
     return()=>{if(pollRef.current)clearInterval(pollRef.current);};
-  },[screen,token,fetchAll,view]);
+  },[screen,token,fetchAll,refreshIfNeeded,view]);
 
   const handleLogin=async()=>{
     setError(null);setLoading(true);
