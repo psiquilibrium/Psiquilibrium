@@ -317,6 +317,20 @@ function App(){
         try{
           const d=await api({action:"moverBloqueo",token,id:b.id,consultorio:cons,fecha,franja:fi});
           if(!d.ok){
+            if(d.error==="Acción no reconocida"){
+              const del=await api({action:"eliminarBloqueo",token,id:b.id});
+              if(del.ok){
+                const creado=await api({action:"crearBloqueo",token,consultorio:cons,fecha,franja:fi,duracion:b.duracion,nota:b.nota,repeticion:b.repeticion});
+                if(creado.ok){setBloqueos(prev=>prev.map(x=>x.id===b.id?{...x,id:creado.id}:x));fetchAll(token);setDragItem(null);return;}
+                setError(creado.error);
+              }else{
+                setError(del.error);
+              }
+              setBloqueos(prev=>prev.map(x=>x.id===b.id?b:x));
+              fetchAll(token);
+              setDragItem(null);
+              return;
+            }
             setBloqueos(prev=>prev.map(x=>x.id===b.id?b:x));
             setError(d.error);
             fetchAll(token);
