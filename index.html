@@ -217,6 +217,7 @@ function App(){
   };
   const getBloqueoAt=(cons,fecha,fi)=>agendaIndex.bloqueoSlots.get(slotKey(cons,fecha,fi));
   const getReserva=(cons,fecha,fi)=>agendaIndex.reservaSlots.get(slotKey(cons,fecha,fi));
+  const isTempId=id=>String(id||"").startsWith("temp_");
   const hasConflictLocal=(cons,fecha,fi,dur,excl=null)=>{
     const s=fi*30,e=s+dur;
     return reservas.some(r=>{
@@ -238,7 +239,7 @@ function App(){
     setModal(null);showToast("Reserva creada");
     try{
       const d=await api({action:"crearReserva",token,consultorio:modal.consultorio,fecha:modal.fecha,franja:fi,duracion:dur,nota:form.nota,targetUserId});
-      if(d.ok) fetchAll(token);
+      if(d.ok){setReservas(prev=>prev.map(r=>r.id===tempId?{...r,id:d.id}:r));fetchAll(token);}
       else{setError(d.error);setReservas(prev=>prev.filter(r=>r.id!==tempId));}
     }catch{setError("Error al guardar.");setReservas(prev=>prev.filter(r=>r.id!==tempId));}
   };
@@ -255,26 +256,28 @@ function App(){
     }catch{setError("Error al actualizar.");fetchAll(token);}
   };
   const handleEstado=async(id,estado)=>{
-    const prevReservas=reservas;
+    if(isTempId(id)){setError("La reserva aún se está sincronizando. Intenta de nuevo en unos segundos.");fetchAll(token);return;}
+    const previous=reservas.find(r=>r.id===id);
     setReservas(prev=>prev.map(r=>r.id===id?{...r,estado}:r));
     setModal(null);
     showToast(estado==="cancelada"?"Cancelada":"Confirmada",estado==="cancelada"?"danger":"success");
     try{
       const d=await api({action:"cambiarEstado",token,id,estado});
       if(d.ok) fetchAll(token);
-      else{setReservas(prevReservas);setError(d.error);fetchAll(token);}
-    }catch{setReservas(prevReservas);setError("Error.");fetchAll(token);}
+      else{if(previous)setReservas(prev=>prev.map(r=>r.id===id?previous:r));setError(d.error);fetchAll(token);}
+    }catch{if(previous)setReservas(prev=>prev.map(r=>r.id===id?previous:r));setError("Error.");fetchAll(token);}
   };
   const handleDelete=async(id)=>{
-    const prevReservas=reservas;
+    if(isTempId(id)){setError("La reserva aún se está sincronizando. Intenta de nuevo en unos segundos.");fetchAll(token);return;}
+    const previous=reservas.find(r=>r.id===id);
     setReservas(prev=>prev.filter(r=>r.id!==id));
     setModal(null);
     showToast("Eliminada","danger");
     try{
       const d=await api({action:"eliminarReserva",token,id});
       if(d.ok) fetchAll(token);
-      else{setReservas(prevReservas);setError(d.error);fetchAll(token);}
-    }catch{setReservas(prevReservas);setError("Error.");fetchAll(token);}
+      else{if(previous)setReservas(prev=>prev.some(r=>r.id===id)?prev:[...prev,previous]);setError(d.error);fetchAll(token);}
+    }catch{if(previous)setReservas(prev=>prev.some(r=>r.id===id)?prev:[...prev,previous]);setError("Error.");fetchAll(token);}
   };
 
   // Drag & drop
@@ -340,20 +343,21 @@ function App(){
     showToast("Bloqueo creado");
     try{
       const d=await api({action:"crearBloqueo",token,consultorio:bForm.consultorio,fecha:bloqueoModal.fecha,franja:fi,duracion:dur,nota:bForm.nota,repeticion:bForm.repeticion});
-      if(d.ok) fetchAll(token);
+      if(d.ok){setBloqueos(prev=>prev.map(b=>b.id===tempId?{...b,id:d.id}:b));fetchAll(token);}
       else{setBloqueos(prev=>prev.filter(b=>b.id!==tempId));setError(d.error);fetchAll(token);}
     }catch{setBloqueos(prev=>prev.filter(b=>b.id!==tempId));setError("Error.");fetchAll(token);}
   };
   const handleEliminarBloqueo=async(id)=>{
-    const prevBloqueos=bloqueos;
+    if(isTempId(id)){setError("El bloqueo aún se está sincronizando. Intenta de nuevo en unos segundos.");fetchAll(token);return;}
+    const previous=bloqueos.find(b=>b.id===id);
     setBloqueos(prev=>prev.filter(b=>b.id!==id));
     setBloqueoModal(null);
     showToast("Bloqueo eliminado","danger");
     try{
       const d=await api({action:"eliminarBloqueo",token,id});
       if(d.ok) fetchAll(token);
-      else{setBloqueos(prevBloqueos);setError(d.error);fetchAll(token);}
-    }catch{setBloqueos(prevBloqueos);setError("Error.");fetchAll(token);}
+      else{if(previous)setBloqueos(prev=>prev.some(b=>b.id===id)?prev:[...prev,previous]);setError(d.error);fetchAll(token);}
+    }catch{if(previous)setBloqueos(prev=>prev.some(b=>b.id===id)?prev:[...prev,previous]);setError("Error.");fetchAll(token);}
   };
 
   const openCell=(cons,fecha,fi)=>{
