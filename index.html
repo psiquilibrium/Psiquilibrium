@@ -84,6 +84,7 @@ function App(){
   const fetchInFlightKeyRef=useRef(null);
   const latestFetchKeyRef=useRef(null);
   const agendaVersionRef=useRef({key:null,version:null});
+  const dataVersionRef=useRef(0);
 
   useEffect(()=>{
     const onResize=()=>setIsMobile(window.innerWidth<=720);
@@ -153,10 +154,12 @@ function App(){
     if(fetchInFlightKeyRef.current===fetchKey)return;
     fetchInFlightKeyRef.current=fetchKey;
     latestFetchKeyRef.current=fetchKey;
+    const dataVersionAtStart=dataVersionRef.current;
     try{
       if(!needsFullData){
         const d=await api({action:"getAgenda",token:activeToken,desde:weekStart,hasta:weekEnd});
         if(latestFetchKeyRef.current!==fetchKey)return;
+        if(dataVersionRef.current!==dataVersionAtStart)return;
         if(d.ok){
           setReservas(d.reservas.map(x=>({...x,franja:Number(x.franja),duracion:Number(x.duracion),consultorio:Number(x.consultorio)})));
           setBloqueos(d.bloqueos.map(x=>({...x,franja:Number(x.franja),duracion:Number(x.duracion),consultorio:x.consultorio==="todos"?"todos":Number(x.consultorio)})));
@@ -166,6 +169,7 @@ function App(){
       }
       const [r,b]=await Promise.all([api({action:"getReservas",token:activeToken}),api({action:"getBloqueos",token:activeToken})]);
       if(latestFetchKeyRef.current!==fetchKey)return;
+      if(dataVersionRef.current!==dataVersionAtStart)return;
       if(r.ok) setReservas(r.reservas.map(x=>({...x,franja:Number(x.franja),duracion:Number(x.duracion),consultorio:Number(x.consultorio)})));
       if(b.ok) setBloqueos(b.bloqueos.map(x=>({...x,franja:Number(x.franja),duracion:Number(x.duracion),consultorio:x.consultorio==="todos"?"todos":Number(x.consultorio)})));
       agendaVersionRef.current={key:fetchKey,version:null};
@@ -218,6 +222,7 @@ function App(){
   const getBloqueoAt=(cons,fecha,fi)=>agendaIndex.bloqueoSlots.get(slotKey(cons,fecha,fi));
   const getReserva=(cons,fecha,fi)=>agendaIndex.reservaSlots.get(slotKey(cons,fecha,fi));
   const isTempId=id=>String(id||"").startsWith("temp_");
+  const markLocalChange=()=>{dataVersionRef.current+=1;return dataVersionRef.current;};
   const hasConflictLocal=(cons,fecha,fi,dur,excl=null)=>{
     const s=fi*30,e=s+dur;
     return reservas.some(r=>{
@@ -235,6 +240,7 @@ function App(){
     const targetUserId=(isAdmin&&form.profesionalId)?form.profesionalId:currentUser.id;
     const tempId="temp_"+Date.now();
     const nueva={id:tempId,consultorio:modal.consultorio,userId:targetUserId,fecha:modal.fecha,franja:fi,duracion:dur,nota:form.nota,tipo:"normal",estado:"confirmada"};
+    markLocalChange();
     setReservas(prev=>[...prev,nueva]);
     setModal(null);showToast("Reserva creada");
     try{
@@ -248,6 +254,7 @@ function App(){
     if(ff<=fi){setConflict(true);return;}
     const dur=(ff-fi)*30;
     if(hasConflictLocal(modal.consultorio,modal.fecha,fi,dur,modal.reserva.id)){setConflict(true);return;}
+    markLocalChange();
     setReservas(prev=>prev.map(r=>r.id===modal.reserva.id?{...r,duracion:dur,nota:form.nota}:r));
     setModal(null);showToast("Reserva actualizada");
     try{
@@ -258,6 +265,7 @@ function App(){
   const handleEstado=async(id,estado)=>{
     if(isTempId(id)){setError("La reserva aún se está sincronizando. Intenta de nuevo en unos segundos.");fetchAll(token);return;}
     const previous=reservas.find(r=>r.id===id);
+    markLocalChange();
     setReservas(prev=>prev.map(r=>r.id===id?{...r,estado}:r));
     setModal(null);
     showToast(estado==="cancelada"?"Cancelada":"Confirmada",estado==="cancelada"?"danger":"success");
@@ -270,6 +278,7 @@ function App(){
   const handleDelete=async(id)=>{
     if(isTempId(id)){setError("La reserva aún se está sincronizando. Intenta de nuevo en unos segundos.");fetchAll(token);return;}
     const previous=reservas.find(r=>r.id===id);
+    markLocalChange();
     setReservas(prev=>prev.filter(r=>r.id!==id));
     setModal(null);
     showToast("Eliminada","danger");
@@ -287,10 +296,12 @@ function App(){
   const onDrop=async(e,cons,fecha,fi)=>{
     e.preventDefault();e.currentTarget.classList.remove("drop-target","drop-target-blocked");
     if(!dragItem)return;
+    if(isTempId(dragItem.id)){setError("Este elemento aún se está sincronizando. Intenta de nuevo en unos segundos.");setDragItem(null);fetchAll(token);return;}
     if(dragItem.type==="reserva"){
       const r=reservas.find(x=>x.id===dragItem.id);
       if(!r||r.consultorio===cons&&r.fecha===fecha&&r.franja===fi){setDragItem(null);return;}
       // Optimista
+      markLocalChange();
       setReservas(prev=>prev.map(x=>x.id===dragItem.id?{...x,consultorio:cons,fecha,franja:fi}:x));
       showToast("Reserva movida");
       try{
@@ -300,12 +311,20 @@ function App(){
     } else {
       const b=bloqueos.find(x=>x.id===dragItem.id);
       if(b){
+        markLocalChange();
         setBloqueos(prev=>prev.map(x=>x.id===dragItem.id?{...x,consultorio:cons,fecha,franja:fi}:x));
         showToast("Bloqueo movido");
         try{
-          await api({action:"eliminarBloqueo",token,id:b.id});
+          const del=await api({action:"eliminarBloqueo",token,id:b.id});
+          if(!del.ok){
+            setBloqueos(prev=>prev.map(x=>x.id===b.id?b:x));
+            setError(del.error);
+            fetchAll(token);
+            setDragItem(null);
+            return;
+          }
           const d=await api({action:"crearBloqueo",token,consultorio:cons,fecha,franja:fi,duracion:b.duracion,nota:b.nota,repeticion:b.repeticion});
-          if(d.ok) fetchAll(token);
+          if(d.ok){setBloqueos(prev=>prev.map(x=>x.id===b.id?{...x,id:d.id}:x));fetchAll(token);}
           else{setError(d.error);fetchAll(token);}
         }catch{setError("Error al mover bloqueo.");fetchAll(token);}
       }
@@ -314,9 +333,13 @@ function App(){
   };
 
   // Copiar/pegar
-  const handleCopy=(type,item)=>{setClipboard({type,item});showToast(`${type==="bloqueo"?"Bloqueo":"Reserva"} copiado — clic en celda destino`);};
+  const handleCopy=(type,item)=>{
+    if(isTempId(item?.id)){setError("Este elemento aún se está sincronizando. Intenta de nuevo en unos segundos.");fetchAll(token);return;}
+    setClipboard({type,item});showToast(`${type==="bloqueo"?"Bloqueo":"Reserva"} copiado — clic en celda destino`);
+  };
   const handlePaste=async(cons,fecha,fi)=>{
     if(!clipboard)return;
+    if(isTempId(clipboard.item?.id)){setClipboard(null);setError("El elemento copiado aún se estaba sincronizando. Intenta copiarlo de nuevo.");fetchAll(token);return;}
     setLoading(true);
     try{
       if(clipboard.type==="reserva"){
@@ -338,6 +361,7 @@ function App(){
     const dur=(ff-fi)*30;
     const tempId="temp_b_"+Date.now();
     const nuevo={id:tempId,consultorio:bForm.consultorio==="todos"?"todos":Number(bForm.consultorio),fecha:bloqueoModal.fecha,franja:fi,duracion:dur,nota:bForm.nota,repeticion:bForm.repeticion};
+    markLocalChange();
     setBloqueos(prev=>[...prev,nuevo]);
     setBloqueoModal(null);
     showToast("Bloqueo creado");
@@ -350,6 +374,7 @@ function App(){
   const handleEliminarBloqueo=async(id)=>{
     if(isTempId(id)){setError("El bloqueo aún se está sincronizando. Intenta de nuevo en unos segundos.");fetchAll(token);return;}
     const previous=bloqueos.find(b=>b.id===id);
+    markLocalChange();
     setBloqueos(prev=>prev.filter(b=>b.id!==id));
     setBloqueoModal(null);
     showToast("Bloqueo eliminado","danger");
@@ -413,8 +438,8 @@ function App(){
       const isRS=r&&r.franja===fi;
       const cancelled=r?.estado==="cancelada";
       const color=r?getUserColor(r.userId):null;
-      const canDragR=r&&(isAdmin||currentUser.id===r.userId);
-      const canDragB=bloqueo&&isBS&&isAdmin;
+      const canDragR=r&&!isTempId(r.id)&&(isAdmin||currentUser.id===r.userId);
+      const canDragB=bloqueo&&isBS&&!isTempId(bloqueo.id)&&isAdmin;
       const isPaste=!!clipboard;
 
       return(
@@ -491,8 +516,8 @@ function App(){
     const isRS=r&&r.franja===fi;
     const cancelled=r?.estado==="cancelada";
     const color=r?getUserColor(r.userId):null;
-    const canDragR=r&&(isAdmin||currentUser.id===r.userId);
-    const canDragB=bloqueo&&isAdmin;
+    const canDragR=r&&!isTempId(r.id)&&(isAdmin||currentUser.id===r.userId);
+    const canDragB=bloqueo&&!isTempId(bloqueo.id)&&isAdmin;
     const isPaste=!!clipboard;
 
     return(
@@ -597,8 +622,8 @@ function App(){
                         const isRS=r&&r.franja===fi;
                         const cancelled=r?.estado==="cancelada";
                         const color=r?getUserColor(r.userId):null;
-                        const canDragR=r&&(isAdmin||currentUser.id===r.userId);
-                        const canDragB=bloqueo&&isBS&&isAdmin;
+                        const canDragR=r&&!isTempId(r.id)&&(isAdmin||currentUser.id===r.userId);
+                        const canDragB=bloqueo&&isBS&&!isTempId(bloqueo.id)&&isAdmin;
                         const isPaste=!!clipboard;
                         return(
                           <td key={`${di}-${ci}`}
