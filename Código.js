@@ -41,6 +41,7 @@ function handle(e) {
       case "eliminarBloqueo":        return resp(eliminarBloqueo(merged, token));
       case "getBloqueos":            return resp(getBloqueos());
       case "generarPreestablecidas": return resp(generarPreestablecidas(merged, token));
+      case "diagnosticarDatos":      return resp(diagnosticarDatos(token));
       case "migrarFranjas":          return resp(migrarFranjas(token));
       default: return resp({ ok: false, error: "Acción no reconocida" });
     }
@@ -418,6 +419,183 @@ function moverBloqueo(body, token) {
     }
     return { ok: false, error: "Bloqueo no encontrado" };
   });
+}
+
+// ── Diagnóstico de datos (solo lectura) ──────────────────────
+function diagnosticarDatos(token) {
+  const user = getUserFromToken(token);
+  if (user.rol !== "admin") return { ok: false, error: "Solo admin" };
+
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  const reservas = diagnosticarReservas(ss);
+  const bloqueos = diagnosticarBloqueos(ss);
+  return {
+    ok: true,
+    generadoEn: Utilities.formatDate(new Date(), Session.getScriptTimeZone(), "yyyy-MM-dd HH:mm:ss"),
+    resumen: {
+      reservasActivas: reservas.activas,
+      reservasDuplicadas: reservas.totalDuplicados,
+      reservasInvalidas: reservas.totalInvalidos,
+      bloqueosActivos: bloqueos.activos,
+      bloqueosDuplicados: bloqueos.totalDuplicados,
+      bloqueosInvalidos: bloqueos.totalInvalidos
+    },
+    reservas,
+    bloqueos
+  };
+}
+
+function diagnosticarReservas(ss) {
+  const sheet = ss.getSheetByName(SHEET_RESERVAS);
+  const result = { activas: 0, totalDuplicados: 0, totalInvalidos: 0, duplicados: [], invalidos: [] };
+  if (!sheet) {
+    result.invalidos.push({ fila: null, id: "", problemas: ["No existe hoja de reservas"] });
+    result.totalInvalidos = result.invalidos.length;
+    return result;
+  }
+
+  const data = sheet.getDataRange().getValues();
+  const porId = {};
+  const porSlot = {};
+  for (let i = 1; i < data.length; i++) {
+    const row = data[i];
+    const [id, consultorio, userId, fecha, franja, duracion, , activa, , estado] = row;
+    if (activa === false || String(activa).toUpperCase() === "FALSE") continue;
+    if (String(estado || "confirmada").toLowerCase() === "cancelada") continue;
+    result.activas++;
+
+    const problemas = [];
+    const consIdx = normalizarConsultorioIndice(consultorio);
+    const fechaStr = fechaToString(fecha);
+    const franjaNum = Number(franja);
+    const duracionNum = Number(duracion);
+
+    if (!id) problemas.push("Sin id");
+    if (consIdx < 0 || consIdx >= NOMBRES_CONSULTORIOS.length) problemas.push("Consultorio inválido");
+    if (!userId) problemas.push("Sin profesional");
+    if (!esFechaValida(fechaStr)) problemas.push("Fecha inválida");
+    if (!esFranjaValida(franjaNum)) problemas.push("Franja inválida");
+    if (!esDuracionValida(duracionNum, franjaNum)) problemas.push("Duración inválida");
+
+    if (problemas.length) {
+      result.invalidos.push(ejemploDiagnostico(i + 1, id, consultorio, fechaStr, franja, duracion, problemas));
+    }
+
+    const idKey = String(id || "").trim();
+    if (idKey) agregarGrupoDiagnostico(porId, "id:" + idKey, i + 1, id, consultorio, fechaStr, franja, duracion);
+    if (idKey && consIdx >= 0 && esFechaValida(fechaStr) && esFranjaValida(franjaNum) && esDuracionValida(duracionNum, franjaNum)) {
+      const slotKey = ["slot", consIdx, fechaStr, franjaNum, duracionNum, String(userId || "")].join("|");
+      agregarGrupoDiagnostico(porSlot, slotKey, i + 1, id, consultorio, fechaStr, franja, duracion);
+    }
+  }
+
+  const duplicados = gruposDuplicados(porId, "Id repetido").concat(gruposDuplicados(porSlot, "Misma reserva activa"));
+  result.totalDuplicados = duplicados.length;
+  result.totalInvalidos = result.invalidos.length;
+  result.duplicados = duplicados;
+  result.invalidos = limitarEjemplos(result.invalidos);
+  result.duplicados = limitarEjemplos(result.duplicados);
+  return result;
+}
+
+function diagnosticarBloqueos(ss) {
+  const sheet = ss.getSheetByName(SHEET_BLOQUEOS);
+  const result = { activas: 0, totalDuplicados: 0, totalInvalidos: 0, duplicados: [], invalidos: [] };
+  if (!sheet) return result;
+
+  const data = sheet.getDataRange().getValues();
+  const porId = {};
+  const porBloqueo = {};
+  for (let i = 1; i < data.length; i++) {
+    const row = data[i];
+    const [id, consultorio, franja, fecha, duracion, , activo, repeticion] = row;
+    if (activo === false || String(activo).toUpperCase() === "FALSE") continue;
+    result.activas++;
+
+    const problemas = [];
+    const consIdx = consultorio === "todos" ? "todos" : normalizarConsultorioIndice(consultorio);
+    const fechaStr = fechaToString(fecha);
+    const franjaNum = Number(franja);
+    const duracionNum = Number(duracion);
+    const rep = String(repeticion || "ninguna");
+
+    if (!id) problemas.push("Sin id");
+    if (consIdx !== "todos" && (consIdx < 0 || consIdx >= NOMBRES_CONSULTORIOS.length)) problemas.push("Consultorio inválido");
+    if (!esFechaValida(fechaStr)) problemas.push("Fecha inválida");
+    if (!esFranjaValida(franjaNum)) problemas.push("Franja inválida");
+    if (!esDuracionValida(duracionNum, franjaNum)) problemas.push("Duración inválida");
+    if (rep !== "ninguna" && rep !== "semanal") problemas.push("Repetición inválida");
+
+    if (problemas.length) {
+      result.invalidos.push(ejemploDiagnostico(i + 1, id, consultorio, fechaStr, franja, duracion, problemas));
+    }
+
+    const idKey = String(id || "").trim();
+    if (idKey) agregarGrupoDiagnostico(porId, "id:" + idKey, i + 1, id, consultorio, fechaStr, franja, duracion);
+    if (idKey && (consIdx === "todos" || consIdx >= 0) && esFechaValida(fechaStr) && esFranjaValida(franjaNum) && esDuracionValida(duracionNum, franjaNum)) {
+      const bloqueoKey = ["bloqueo", consIdx, fechaStr, franjaNum, duracionNum, rep].join("|");
+      agregarGrupoDiagnostico(porBloqueo, bloqueoKey, i + 1, id, consultorio, fechaStr, franja, duracion);
+    }
+  }
+
+  const duplicados = gruposDuplicados(porId, "Id repetido").concat(gruposDuplicados(porBloqueo, "Mismo bloqueo activo"));
+  result.totalDuplicados = duplicados.length;
+  result.totalInvalidos = result.invalidos.length;
+  result.duplicados = duplicados;
+  result.invalidos = limitarEjemplos(result.invalidos);
+  result.duplicados = limitarEjemplos(result.duplicados);
+  return result;
+}
+
+function normalizarConsultorioIndice(consultorio) {
+  let idx = Number(consultorio);
+  if (isNaN(idx)) idx = NOMBRES_CONSULTORIOS.indexOf(String(consultorio));
+  return idx;
+}
+
+function esFechaValida(fechaStr) {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(String(fechaStr))) return false;
+  const d = parseFechaLocal(fechaStr);
+  return !isNaN(d.getTime()) && fechaToString(d) === fechaStr;
+}
+
+function esFranjaValida(franja) {
+  return Number.isInteger(Number(franja)) && Number(franja) >= 0 && Number(franja) < 20;
+}
+
+function esDuracionValida(duracion, franja) {
+  const dur = Number(duracion);
+  const fra = Number(franja);
+  return Number.isFinite(dur) && dur > 0 && dur % 30 === 0 && Number.isFinite(fra) && fra * 30 + dur <= 600;
+}
+
+function ejemploDiagnostico(fila, id, consultorio, fecha, franja, duracion, problemas) {
+  return {
+    fila,
+    id: String(id || ""),
+    consultorio: String(consultorio || ""),
+    fecha: String(fecha || ""),
+    franja: String(franja || ""),
+    duracion: String(duracion || ""),
+    problemas
+  };
+}
+
+function agregarGrupoDiagnostico(map, key, fila, id, consultorio, fecha, franja, duracion) {
+  if (!map[key]) map[key] = [];
+  map[key].push(ejemploDiagnostico(fila, id, consultorio, fecha, franja, duracion, []));
+}
+
+function gruposDuplicados(map, tipo) {
+  return Object.keys(map).filter(k => map[k].length > 1).map(k => ({
+    tipo,
+    cantidad: map[k].length,
+    items: map[k]
+  }));
+}
+
+function limitarEjemplos(items) {
+  return items.slice(0, 10);
 }
 
 // ── Reservas preestablecidas ──────────────────────────────────

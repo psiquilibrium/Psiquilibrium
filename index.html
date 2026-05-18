@@ -72,6 +72,7 @@ function App(){
   const [view,setView]=useState("consolidada");
   const [modal,setModal]=useState(null);
   const [bloqueoModal,setBloqueoModal]=useState(null);
+  const [diagnostico,setDiagnostico]=useState(null);
   const [form,setForm]=useState({nota:"",franjaInicio:"0",franjaFin:"2",profesionalId:""});
   const [bForm,setBForm]=useState({nota:"",franjaInicio:"0",franjaFin:"2",repeticion:"ninguna",consultorio:"0"});
   const [conflict,setConflict]=useState(false);
@@ -440,6 +441,17 @@ function App(){
     finally{endSync(id);}
   };
 
+  const handleDiagnostico=async()=>{
+    setLoading(true);
+    setError(null);
+    try{
+      const d=await api({action:"diagnosticarDatos",token});
+      if(d.ok){setDiagnostico(d);showToast("Diagnóstico listo");}
+      else setError(d.error||"No se pudo diagnosticar.");
+    }catch{setError("Error al diagnosticar datos.");}
+    setLoading(false);
+  };
+
   const openCell=(cons,fecha,fi)=>{
     if(clipboard){handlePaste(cons,fecha,fi);return;}
     const bloqueo=getBloqueoAt(cons,fecha,fi);
@@ -617,6 +629,11 @@ function App(){
   const misReservas=reservas.filter(r=>r.userId===currentUser?.id).sort((a,b)=>a.fecha.localeCompare(b.fecha)||a.franja-b.franja);
   const todasReservas=[...reservas].sort((a,b)=>a.fecha.localeCompare(b.fecha)||a.franja-b.franja);
   const profesionales=allUsers.filter(u=>u.rol==="profesional");
+  const renderEjemplos=items=>(items||[]).slice(0,3).map((x,i)=>{
+    const filas=x.items?x.items.map(it=>it.fila).join(", "):x.fila;
+    const detalle=x.items?`${x.tipo} (${x.cantidad})`:x.problemas.join(", ");
+    return <div key={i} style={{fontSize:11,color:"var(--muted)",marginTop:3}}>Filas {filas}: {detalle}</div>;
+  });
 
   return(
     <div style={{paddingBottom:"2rem"}}>
@@ -825,8 +842,34 @@ function App(){
         <div>
           <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:12,flexWrap:"wrap",gap:8}}>
             <div style={{fontWeight:600,fontSize:14,color:"var(--navy)"}}>Todas las reservas ({todasReservas.length})</div>
-            {isAdmin&&<button onClick={async()=>{setLoading(true);try{const d=await api({action:"generarPreestablecidas",token});if(d.ok){await fetchAll(token);showToast(`${d.creadas} reservas fijas generadas`);}else setError(d.error);}catch{setError("Error.");}setLoading(false);}} style={{fontSize:12,background:"var(--cyan-light)",color:"var(--navy)"}}>⚡ Generar reservas fijas</button>}
+            {isAdmin&&<div style={{display:"flex",gap:6,flexWrap:"wrap"}}>
+              <button onClick={handleDiagnostico} disabled={loading} style={{fontSize:12,background:"#fff",color:"var(--navy)",border:"1px solid var(--border)"}}>Diagnosticar datos</button>
+              <button onClick={async()=>{setLoading(true);try{const d=await api({action:"generarPreestablecidas",token});if(d.ok){await fetchAll(token);showToast(`${d.creadas} reservas fijas generadas`);}else setError(d.error);}catch{setError("Error.");}setLoading(false);}} style={{fontSize:12,background:"var(--cyan-light)",color:"var(--navy)"}}>⚡ Generar reservas fijas</button>
+            </div>}
           </div>
+          {diagnostico&&(
+            <div style={{...s.card,marginBottom:12,borderLeft:"3px solid var(--cyan)"}}>
+              <div style={{display:"flex",justifyContent:"space-between",gap:8,flexWrap:"wrap",marginBottom:8}}>
+                <div style={{fontWeight:600,fontSize:13,color:"var(--navy)"}}>Diagnóstico de datos</div>
+                <div style={s.muted}>{diagnostico.generadoEn}</div>
+              </div>
+              <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(150px,1fr))",gap:8}}>
+                <div style={s.muted}>Reservas activas: <strong>{diagnostico.resumen.reservasActivas}</strong></div>
+                <div style={s.muted}>Reservas duplicadas: <strong>{diagnostico.resumen.reservasDuplicadas}</strong></div>
+                <div style={s.muted}>Reservas inválidas: <strong>{diagnostico.resumen.reservasInvalidas}</strong></div>
+                <div style={s.muted}>Bloqueos activos: <strong>{diagnostico.resumen.bloqueosActivos}</strong></div>
+                <div style={s.muted}>Bloqueos duplicados: <strong>{diagnostico.resumen.bloqueosDuplicados}</strong></div>
+                <div style={s.muted}>Bloqueos inválidos: <strong>{diagnostico.resumen.bloqueosInvalidos}</strong></div>
+              </div>
+              <div style={{marginTop:8}}>
+                {renderEjemplos(diagnostico.reservas.duplicados)}
+                {renderEjemplos(diagnostico.reservas.invalidos)}
+                {renderEjemplos(diagnostico.bloqueos.duplicados)}
+                {renderEjemplos(diagnostico.bloqueos.invalidos)}
+                {diagnostico.resumen.reservasDuplicadas+diagnostico.resumen.reservasInvalidas+diagnostico.resumen.bloqueosDuplicados+diagnostico.resumen.bloqueosInvalidos===0&&<div style={s.muted}>No se encontraron duplicados ni inválidos activos.</div>}
+              </div>
+            </div>
+          )}
           {todasReservas.map(r=>{
             const u=allUsers.find(x=>x.id===r.userId);const color=getUserColor(r.userId);const cancelled=r.estado==="cancelada";
             const syncing=isSyncing(r.id);
