@@ -78,9 +78,13 @@ function App(){
   const [modal,setModal]=useState(null);
   const [bloqueoModal,setBloqueoModal]=useState(null);
   const [diagnostico,setDiagnostico]=useState(null);
+  const [auditoria,setAuditoria]=useState([]);
+  const [auditoriaLoading,setAuditoriaLoading]=useState(false);
+  const [auditoriaError,setAuditoriaError]=useState(null);
   const [form,setForm]=useState({nota:"",franjaInicio:"0",franjaFin:"2",profesionalId:""});
   const [bForm,setBForm]=useState({nota:"",franjaInicio:"0",franjaFin:"2",repeticion:"ninguna",consultorio:"0"});
   const [todasFiltros,setTodasFiltros]=useState({profesional:"todos",consultorio:"todos",estado:"todos",texto:"",alcance:"semana",desde:"",hasta:""});
+  const [actividadFiltros,setActividadFiltros]=useState({tipo:"todos",accion:"todas",periodo:"7"});
   const [conflict,setConflict]=useState(false);
   const [loginForm,setLoginForm]=useState({userId:"",password:""});
   const [dragItem,setDragItem]=useState(null); // {type:"reserva"|"bloqueo", id}
@@ -201,8 +205,21 @@ function App(){
     }catch{fetchAll(activeToken);}
   },[token,weekStart,weekEnd,view,fetchAll]);
 
+  const fetchAuditoria=useCallback(async()=>{
+    if(!token)return;
+    setAuditoriaLoading(true);
+    setAuditoriaError(null);
+    try{
+      const d=await api({action:"getAuditoria",token,limit:100});
+      if(d.ok)setAuditoria(d.eventos||[]);
+      else setAuditoriaError(d.error||"No se pudo cargar actividad.");
+    }catch{setAuditoriaError("Error al cargar actividad.");}
+    setAuditoriaLoading(false);
+  },[token]);
+
   useEffect(()=>{
     if(screen==="app"&&token){
+      if(view==="actividad")return;
       fetchAll(token);
       const pollMs=view==="mis reservas"||view==="todas"?120000:30000;
       pollRef.current=setInterval(()=>{if(!document.hidden)refreshIfNeeded(token);},pollMs);
@@ -215,6 +232,10 @@ function App(){
     }
     return()=>{if(pollRef.current)clearInterval(pollRef.current);};
   },[screen,token,fetchAll,refreshIfNeeded,view]);
+
+  useEffect(()=>{
+    if(screen==="app"&&token&&view==="actividad")fetchAuditoria();
+  },[screen,token,view,fetchAuditoria]);
 
   const handleLogin=async()=>{
     setError(null);setLoading(true);
@@ -693,6 +714,19 @@ function App(){
     else acc.confirmadas++;
     return acc;
   },{confirmadas:0,canceladas:0});
+  const eventosActividad=auditoria.filter(ev=>{
+    if(actividadFiltros.tipo!=="todos"&&ev.tipo!==actividadFiltros.tipo)return false;
+    if(actividadFiltros.accion!=="todas"&&ev.accion!==actividadFiltros.accion)return false;
+    const ts=new Date(String(ev.timestamp||"").replace(" ","T"));
+    if(isNaN(ts.getTime()))return true;
+    const now=new Date();
+    const start=new Date(now);
+    if(actividadFiltros.periodo==="hoy")start.setHours(0,0,0,0);
+    else start.setDate(now.getDate()-Number(actividadFiltros.periodo||7));
+    return ts>=start;
+  });
+  const accionTexto={crear:"Creada",editar:"Editada",mover:"Movida",cancelar:"Cancelada",reconfirmar:"Reconfirmada",eliminar:"Eliminada"};
+  const accionColor={crear:"var(--success)",editar:"var(--navy)",mover:"#9B3FA0",cancelar:"var(--danger)",reconfirmar:"var(--success)",eliminar:"var(--muted)"};
   const renderEjemplos=items=>(items||[]).slice(0,3).map((x,i)=>{
     const filas=x.items?x.items.map(it=>it.fila).join(", "):x.fila;
     const detalle=x.items?`${x.tipo} (${x.cantidad})`:x.problemas.join(", ");
@@ -714,10 +748,10 @@ function App(){
           <span style={{fontSize:12,background:"var(--cyan-light)",padding:"2px 8px",borderRadius:6,color:"var(--navy)"}}>{currentUser.nombre} · {currentUser.rol}</span>
         </div>
         <div style={{display:"flex",gap:6,flexWrap:"wrap"}}>
-          {["consolidada","semana","mis reservas",...(isSocio?["todas"]:[])].map(v=>(
+          {["consolidada","semana","mis reservas",...(isSocio?["todas","actividad"]:[])].map(v=>(
             <button key={v} onClick={()=>setView(v)} style={{fontSize:12,background:view===v?"var(--navy)":"transparent",color:view===v?"#fff":"var(--navy)",border:`1px solid ${view===v?"var(--navy)":"var(--border)"}`}}>{v.charAt(0).toUpperCase()+v.slice(1)}</button>
           ))}
-          <button onClick={()=>fetchAll(token)} style={{fontSize:12,color:"var(--muted)"}} title="Actualizar">↺</button>
+          <button onClick={()=>view==="actividad"?fetchAuditoria():fetchAll(token)} style={{fontSize:12,color:"var(--muted)"}} title="Actualizar">↺</button>
           <button onClick={()=>{sessionStorage.removeItem(SESSION_KEY);setScreen("login");setCurrentUser(null);setToken(null);}} style={{fontSize:12,color:"var(--muted)"}}>Salir</button>
         </div>
       </div>
@@ -968,6 +1002,67 @@ function App(){
               </div>
             );
           })}
+        </div>
+      )}
+
+      {/* ── ACTIVIDAD ── */}
+      {view==="actividad"&&isSocio&&(
+        <div>
+          <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:10,flexWrap:"wrap",gap:8}}>
+            <div>
+              <div style={{fontWeight:600,fontSize:14,color:"var(--navy)"}}>Actividad</div>
+              <div style={s.muted}>{eventosActividad.length} eventos visibles de {auditoria.length} cargados</div>
+            </div>
+            <button onClick={fetchAuditoria} disabled={auditoriaLoading} style={{fontSize:12,background:"#fff",color:"var(--navy)",border:"1px solid var(--border)"}}>
+              {auditoriaLoading?"Cargando...":"Actualizar"}
+            </button>
+          </div>
+          <div style={{...s.card,padding:"0.75rem",marginBottom:12}}>
+            <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(145px,1fr))",gap:8,alignItems:"end"}}>
+              <div><label style={s.label}>Tipo</label>
+                <select value={actividadFiltros.tipo} onChange={e=>setActividadFiltros(f=>({...f,tipo:e.target.value}))}>
+                  <option value="todos">Todo</option>
+                  <option value="reserva">Reservas</option>
+                  <option value="bloqueo">Bloqueos</option>
+                </select>
+              </div>
+              <div><label style={s.label}>Acción</label>
+                <select value={actividadFiltros.accion} onChange={e=>setActividadFiltros(f=>({...f,accion:e.target.value}))}>
+                  <option value="todas">Todas</option>
+                  <option value="crear">Creadas</option>
+                  <option value="editar">Editadas</option>
+                  <option value="mover">Movidas</option>
+                  <option value="cancelar">Canceladas</option>
+                  <option value="reconfirmar">Reconfirmadas</option>
+                  <option value="eliminar">Eliminadas</option>
+                </select>
+              </div>
+              <div><label style={s.label}>Periodo</label>
+                <select value={actividadFiltros.periodo} onChange={e=>setActividadFiltros(f=>({...f,periodo:e.target.value}))}>
+                  <option value="hoy">Hoy</option>
+                  <option value="7">Últimos 7 días</option>
+                  <option value="30">Últimos 30 días</option>
+                </select>
+              </div>
+              <button onClick={()=>setActividadFiltros({tipo:"todos",accion:"todas",periodo:"7"})} style={{fontSize:12,color:"var(--muted)"}}>Limpiar</button>
+            </div>
+          </div>
+          {auditoriaError&&<div style={{...s.card,borderLeft:"3px solid var(--danger)",marginBottom:10,color:"var(--danger)",fontSize:13}}>{auditoriaError}</div>}
+          {!auditoriaError&&auditoriaLoading&&auditoria.length===0&&<p style={s.muted}>Cargando actividad...</p>}
+          {!auditoriaLoading&&eventosActividad.length===0&&!auditoriaError&&<p style={s.muted}>No hay actividad con esos filtros.</p>}
+          {eventosActividad.map((ev,i)=>(
+            <div key={`${ev.timestamp}-${ev.elementoId}-${i}`} style={{...s.card,marginBottom:8,borderLeft:`3px solid ${accionColor[ev.accion]||"var(--border)"}`}}>
+              <div style={{display:"flex",justifyContent:"space-between",gap:8,alignItems:"flex-start",flexWrap:"wrap",marginBottom:4}}>
+                <div style={{fontWeight:600,fontSize:13,color:"var(--navy)",lineHeight:1.35}}>{`${ev.nombre||ev.userId||"Usuario"} ${ev.resumen||"realizó un cambio"}`}</div>
+                <span style={{fontSize:11,background:"var(--cyan-light)",color:"var(--navy)",padding:"2px 8px",borderRadius:6,whiteSpace:"nowrap"}}>
+                  {accionTexto[ev.accion]||ev.accion||"Actividad"}
+                </span>
+              </div>
+              <div style={{...s.muted,lineHeight:1.45}}>
+                {ev.tipo==="bloqueo"?"Bloqueo":"Reserva"} · {ev.timestamp}
+              </div>
+            </div>
+          ))}
         </div>
       )}
 

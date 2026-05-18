@@ -5,6 +5,7 @@
 const SHEET_RESERVAS = "Reservas";
 const SHEET_USUARIOS = "Usuarios";
 const SHEET_BLOQUEOS = "Bloqueos";
+const SHEET_AUDITORIA = "Auditoria";
 const NOMBRES_CONSULTORIOS = ["Consultorio 1","Consultorio 2","Consultorio 3","Consultorio 4"];
 const CACHE_AGENDA_PREFIX = "agenda_v1_";
 
@@ -40,6 +41,7 @@ function handle(e) {
       case "moverBloqueo":           return resp(moverBloqueo(merged, token));
       case "eliminarBloqueo":        return resp(eliminarBloqueo(merged, token));
       case "getBloqueos":            return resp(getBloqueos());
+      case "getAuditoria":           return resp(getAuditoria(merged, token));
       case "generarPreestablecidas": return resp(generarPreestablecidas(merged, token));
       case "diagnosticarDatos":      return resp(diagnosticarDatos(token));
       case "migrarFranjas":          return resp(migrarFranjas(token));
@@ -86,6 +88,16 @@ function getUserFromToken(token) {
   const decoded = Utilities.newBlob(Utilities.base64Decode(token)).getDataAsString();
   const parts = decoded.split(":");
   return { id: parts[0], rol: parts[1] };
+}
+
+function getUserNameById(userId) {
+  const sheet = SpreadsheetApp.getActiveSpreadsheet().getSheetByName(SHEET_USUARIOS);
+  if (!sheet) return String(userId || "");
+  const data = sheet.getDataRange().getValues();
+  for (let i = 1; i < data.length; i++) {
+    if (String(data[i][0]) === String(userId)) return String(data[i][1] || userId);
+  }
+  return String(userId || "");
 }
 
 // ── Migración de franjas horarias (ejecutar UNA sola vez) ────
@@ -208,6 +220,115 @@ function reservaFromRow(row) {
   };
 }
 
+// ── Auditoría ────────────────────────────────────────────────
+function ensureAuditoriaSheet(ss) {
+  let sheet = ss.getSheetByName(SHEET_AUDITORIA);
+  if (!sheet) {
+    sheet = ss.insertSheet(SHEET_AUDITORIA);
+    sheet.appendRow(["timestamp","userId","nombre","rol","accion","tipo","elementoId","resumen","antes","despues"]);
+  }
+  return sheet;
+}
+
+function registrarAuditoria(user, accion, tipo, elementoId, resumen, antes, despues) {
+  try {
+    const ss = SpreadsheetApp.getActiveSpreadsheet();
+    const sheet = ensureAuditoriaSheet(ss);
+    const nombre = getUserNameById(user.id) || user.id;
+    sheet.appendRow([
+      new Date(),
+      user.id,
+      nombre,
+      user.rol,
+      accion,
+      tipo,
+      elementoId,
+      resumen,
+      antes ? JSON.stringify(antes) : "",
+      despues ? JSON.stringify(despues) : ""
+    ]);
+  } catch (err) {}
+}
+
+function getAuditoria(body, token) {
+  const user = getUserFromToken(token);
+  if (user.rol !== "admin" && user.rol !== "socio") return { ok: false, error: "Sin permiso" };
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  const sheet = ensureAuditoriaSheet(ss);
+
+  const limit = Math.min(Math.max(Number(body.limit || 100), 1), 200);
+  const lastRow = sheet.getLastRow();
+  if (lastRow < 2) return { ok: true, eventos: [] };
+  const startRow = Math.max(2, lastRow - limit + 1);
+  const data = sheet.getRange(startRow, 1, lastRow - startRow + 1, 10).getValues();
+  const eventos = data.reverse().map(row => ({
+    timestamp: row[0] instanceof Date ? Utilities.formatDate(row[0], Session.getScriptTimeZone(), "yyyy-MM-dd HH:mm:ss") : String(row[0] || ""),
+    userId: String(row[1] || ""),
+    nombre: String(row[2] || row[1] || ""),
+    rol: String(row[3] || ""),
+    accion: String(row[4] || ""),
+    tipo: String(row[5] || ""),
+    elementoId: String(row[6] || ""),
+    resumen: String(row[7] || ""),
+    antes: String(row[8] || ""),
+    despues: String(row[9] || "")
+  }));
+  return { ok: true, eventos };
+}
+
+function reservaAuditFromRow(row) {
+  if (!row) return null;
+  const [id, consultorio, userId, fecha, franja, duracion, nota, activa, tipo, estado] = row;
+  return {
+    id: String(id || ""),
+    consultorio: String(consultorio || ""),
+    userId: String(userId || ""),
+    profesional: getUserNameById(userId),
+    fecha: fechaToString(fecha),
+    franja: Number(franja),
+    hora: franjaToHora(franja),
+    duracion: Number(duracion),
+    nota: String(nota || ""),
+    activa: activa !== false && String(activa).toUpperCase() !== "FALSE",
+    tipo: String(tipo || "normal"),
+    estado: String(estado || "confirmada")
+  };
+}
+
+function bloqueoAuditFromRow(row) {
+  if (!row) return null;
+  const [id, consultorio, franja, fecha, duracion, nota, activo, repeticion] = row;
+  return {
+    id: String(id || ""),
+    consultorio: String(consultorio || ""),
+    fecha: fechaToString(fecha),
+    franja: Number(franja),
+    hora: franjaToHora(franja),
+    duracion: Number(duracion),
+    nota: String(nota || ""),
+    activo: activo !== false && String(activo).toUpperCase() !== "FALSE",
+    repeticion: String(repeticion || "ninguna")
+  };
+}
+
+function franjaToHora(franja) {
+  const n = Number(franja);
+  if (!Number.isFinite(n)) return String(franja || "");
+  const h = 8 + Math.floor(n / 2);
+  const m = n % 2 === 0 ? "00" : "30";
+  return String(h).padStart(2, "0") + ":" + m;
+}
+
+function resumenReservaAudit(r) {
+  if (!r) return "";
+  return `${r.profesional || r.userId} · ${r.consultorio} · ${r.fecha} · ${r.hora}`;
+}
+
+function resumenBloqueoAudit(b) {
+  if (!b) return "";
+  return `${b.consultorio} · ${b.fecha} · ${b.hora}${b.nota ? " · " + b.nota : ""}`;
+}
+
 function crearReserva(body, token) {
   return withWriteLock(function() {
     const user = getUserFromToken(token);
@@ -220,7 +341,10 @@ function crearReserva(body, token) {
     const consultorioNombre = NOMBRES_CONSULTORIOS[Number(consultorio)] || String(consultorio);
     const sheet = SpreadsheetApp.getActiveSpreadsheet().getSheetByName(SHEET_RESERVAS);
     const id = "R_" + Date.now();
-    sheet.appendRow([id, consultorioNombre, userId, fecha, franja, duracion, nota || "", true, body.tipo || "normal", "confirmada"]);
+    const row = [id, consultorioNombre, userId, fecha, franja, duracion, nota || "", true, body.tipo || "normal", "confirmada"];
+    sheet.appendRow(row);
+    const despues = reservaAuditFromRow(row);
+    registrarAuditoria(user, "crear", "reserva", id, `creó reserva de ${resumenReservaAudit(despues)}`, null, despues);
     invalidateAgendaCache();
     return { ok: true, id };
   });
@@ -236,8 +360,11 @@ function editarReserva(body, token) {
       if (String(data[i][0]) !== String(body.id)) continue;
       if (user.rol !== "admin" && user.id !== String(data[i][2])) return { ok: false, error: "Sin permiso" };
       if (hayConflicto(data[i][1], data[i][3], data[i][4], body.duracion, body.id)) return { ok: false, error: "Conflicto de horario" };
+      const antes = reservaAuditFromRow(data[i]);
       sheet.getRange(i + 1, 6).setValue(body.duracion);
       sheet.getRange(i + 1, 7).setValue(body.nota || "");
+      const despues = reservaAuditFromRow([data[i][0],data[i][1],data[i][2],data[i][3],data[i][4],body.duracion,body.nota || "",data[i][7],data[i][8],data[i][9]]);
+      registrarAuditoria(user, "editar", "reserva", String(body.id), `editó reserva de ${resumenReservaAudit(despues)}`, antes, despues);
       invalidateAgendaCache();
       return { ok: true };
     }
@@ -258,7 +385,11 @@ function cambiarEstado(body, token) {
         if (user.id !== propietario) return { ok: false, error: "Sin permiso" };
         if (body.estado !== "cancelada") return { ok: false, error: "Solo puedes cancelar tus propias reservas" };
       }
+      const antes = reservaAuditFromRow(data[i]);
       sheet.getRange(i + 1, 10).setValue(body.estado);
+      const despues = reservaAuditFromRow([data[i][0],data[i][1],data[i][2],data[i][3],data[i][4],data[i][5],data[i][6],data[i][7],data[i][8],body.estado]);
+      const accion = body.estado === "cancelada" ? "cancelar" : "reconfirmar";
+      registrarAuditoria(user, accion, "reserva", String(body.id), `${accion === "cancelar" ? "canceló" : "reconfirmó"} reserva de ${resumenReservaAudit(despues)}`, antes, despues);
       invalidateAgendaCache();
       return { ok: true };
     }
@@ -279,9 +410,12 @@ function moverReserva(body, token) {
       if (estaBloquado(body.consultorio, body.fecha, body.franja, dur)) return { ok: false, error: "Franja bloqueada" };
       if (hayConflicto(body.consultorio, body.fecha, body.franja, dur, body.id)) return { ok: false, error: "Conflicto de horario" };
       const consultorioNombre = NOMBRES_CONSULTORIOS[Number(body.consultorio)] || String(body.consultorio);
+      const antes = reservaAuditFromRow(data[i]);
       sheet.getRange(i + 1, 2).setValue(consultorioNombre);
       sheet.getRange(i + 1, 4).setValue(body.fecha);
       sheet.getRange(i + 1, 5).setValue(body.franja);
+      const despues = reservaAuditFromRow([data[i][0],consultorioNombre,data[i][2],body.fecha,body.franja,data[i][5],data[i][6],data[i][7],data[i][8],data[i][9]]);
+      registrarAuditoria(user, "mover", "reserva", String(body.id), `movió reserva de ${resumenReservaAudit(antes)} → ${despues.consultorio} · ${despues.fecha} · ${despues.hora}`, antes, despues);
       invalidateAgendaCache();
       return { ok: true };
     }
@@ -303,7 +437,10 @@ function copiarReserva(body, token) {
       if (hayConflicto(body.consultorio, body.fecha, body.franja, duracion, null)) return { ok: false, error: "Conflicto de horario" };
       const consultorioNombre = NOMBRES_CONSULTORIOS[Number(body.consultorio)] || String(body.consultorio);
       const newId = "R_" + Date.now();
-      sheet.appendRow([newId, consultorioNombre, targetUserId, body.fecha, body.franja, duracion, nota || "", true, tipo || "normal", "confirmada"]);
+      const row = [newId, consultorioNombre, targetUserId, body.fecha, body.franja, duracion, nota || "", true, tipo || "normal", "confirmada"];
+      sheet.appendRow(row);
+      const despues = reservaAuditFromRow(row);
+      registrarAuditoria(user, "crear", "reserva", newId, `copió reserva de ${resumenReservaAudit(despues)}`, reservaAuditFromRow(data[i]), despues);
       invalidateAgendaCache();
       return { ok: true, id: newId };
     }
@@ -320,7 +457,10 @@ function eliminarReserva(body, token) {
     for (let i = 1; i < data.length; i++) {
       if (String(data[i][0]) !== String(body.id)) continue;
       if (user.rol !== "admin" && user.id !== String(data[i][2])) return { ok: false, error: "Sin permiso" };
+      const antes = reservaAuditFromRow(data[i]);
       sheet.getRange(i + 1, 8).setValue(false);
+      const despues = reservaAuditFromRow([data[i][0],data[i][1],data[i][2],data[i][3],data[i][4],data[i][5],data[i][6],false,data[i][8],data[i][9]]);
+      registrarAuditoria(user, "eliminar", "reserva", String(body.id), `eliminó reserva de ${resumenReservaAudit(antes)}`, antes, despues);
       invalidateAgendaCache();
       return { ok: true };
     }
@@ -374,7 +514,10 @@ function crearBloqueo(body, token) {
     const consultorioVal = body.consultorio === "todos" ? "todos"
       : (NOMBRES_CONSULTORIOS[Number(body.consultorio)] || String(body.consultorio));
     const id = "B_" + Date.now();
-    sheet.appendRow([id, consultorioVal, body.franja, body.fecha, body.duracion, body.nota || "", true, body.repeticion || "ninguna"]);
+    const row = [id, consultorioVal, body.franja, body.fecha, body.duracion, body.nota || "", true, body.repeticion || "ninguna"];
+    sheet.appendRow(row);
+    const despues = bloqueoAuditFromRow(row);
+    registrarAuditoria(user, "crear", "bloqueo", id, `creó bloqueo · ${resumenBloqueoAudit(despues)}`, null, despues);
     invalidateAgendaCache();
     return { ok: true, id };
   });
@@ -389,7 +532,10 @@ function eliminarBloqueo(body, token) {
     const data = sheet.getDataRange().getValues();
     for (let i = 1; i < data.length; i++) {
       if (String(data[i][0]) === String(body.id)) {
+        const antes = bloqueoAuditFromRow(data[i]);
         sheet.getRange(i + 1, 7).setValue(false);
+        const despues = bloqueoAuditFromRow([data[i][0],data[i][1],data[i][2],data[i][3],data[i][4],data[i][5],false,data[i][7]]);
+        registrarAuditoria(user, "eliminar", "bloqueo", String(body.id), `eliminó bloqueo · ${resumenBloqueoAudit(antes)}`, antes, despues);
         invalidateAgendaCache();
         return { ok: true };
       }
@@ -410,9 +556,12 @@ function moverBloqueo(body, token) {
 
     for (let i = 1; i < data.length; i++) {
       if (String(data[i][0]) === String(body.id)) {
+        const antes = bloqueoAuditFromRow(data[i]);
         sheet.getRange(i + 1, 2).setValue(consultorioVal);
         sheet.getRange(i + 1, 3).setValue(body.franja);
         sheet.getRange(i + 1, 4).setValue(body.fecha);
+        const despues = bloqueoAuditFromRow([data[i][0],consultorioVal,body.franja,body.fecha,data[i][4],data[i][5],data[i][6],data[i][7]]);
+        registrarAuditoria(user, "mover", "bloqueo", String(body.id), `movió bloqueo · ${resumenBloqueoAudit(antes)} → ${despues.consultorio} · ${despues.fecha} · ${despues.hora}`, antes, despues);
         invalidateAgendaCache();
         return { ok: true, id: String(body.id) };
       }
