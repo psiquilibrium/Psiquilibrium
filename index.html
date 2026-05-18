@@ -85,6 +85,7 @@ function App(){
   const latestFetchKeyRef=useRef(null);
   const agendaVersionRef=useRef({key:null,version:null});
   const dataVersionRef=useRef(0);
+  const pendingMoveIdsRef=useRef(new Set());
 
   useEffect(()=>{
     const onResize=()=>setIsMobile(window.innerWidth<=720);
@@ -161,8 +162,8 @@ function App(){
         if(latestFetchKeyRef.current!==fetchKey)return;
         if(dataVersionRef.current!==dataVersionAtStart)return;
         if(d.ok){
-          setReservas(d.reservas.map(x=>({...x,franja:Number(x.franja),duracion:Number(x.duracion),consultorio:Number(x.consultorio)})));
-          setBloqueos(d.bloqueos.map(x=>({...x,franja:Number(x.franja),duracion:Number(x.duracion),consultorio:x.consultorio==="todos"?"todos":Number(x.consultorio)})));
+          setReservas(normalizeReservas(d.reservas));
+          setBloqueos(normalizeBloqueos(d.bloqueos));
           agendaVersionRef.current={key:fetchKey,version:d.version||null};
           return;
         }
@@ -170,8 +171,8 @@ function App(){
       const [r,b]=await Promise.all([api({action:"getReservas",token:activeToken}),api({action:"getBloqueos",token:activeToken})]);
       if(latestFetchKeyRef.current!==fetchKey)return;
       if(dataVersionRef.current!==dataVersionAtStart)return;
-      if(r.ok) setReservas(r.reservas.map(x=>({...x,franja:Number(x.franja),duracion:Number(x.duracion),consultorio:Number(x.consultorio)})));
-      if(b.ok) setBloqueos(b.bloqueos.map(x=>({...x,franja:Number(x.franja),duracion:Number(x.duracion),consultorio:x.consultorio==="todos"?"todos":Number(x.consultorio)})));
+      if(r.ok) setReservas(normalizeReservas(r.reservas));
+      if(b.ok) setBloqueos(normalizeBloqueos(b.bloqueos));
       agendaVersionRef.current={key:fetchKey,version:null};
     }catch{}finally{if(fetchInFlightKeyRef.current===fetchKey)fetchInFlightKeyRef.current=null;}
   },[token,weekStart,weekEnd,view]);
@@ -223,6 +224,8 @@ function App(){
   const getReserva=(cons,fecha,fi)=>agendaIndex.reservaSlots.get(slotKey(cons,fecha,fi));
   const isTempId=id=>String(id||"").startsWith("temp_");
   const markLocalChange=()=>{dataVersionRef.current+=1;return dataVersionRef.current;};
+  const normalizeReservas=items=>Array.from(new Map(items.map(x=>[x.id,{...x,franja:Number(x.franja),duracion:Number(x.duracion),consultorio:Number(x.consultorio)}])).values());
+  const normalizeBloqueos=items=>Array.from(new Map(items.map(x=>[x.id,{...x,franja:Number(x.franja),duracion:Number(x.duracion),consultorio:x.consultorio==="todos"?"todos":Number(x.consultorio)}])).values());
   const hasConflictLocal=(cons,fecha,fi,dur,excl=null)=>{
     const s=fi*30,e=s+dur;
     return reservas.some(r=>{
@@ -297,9 +300,11 @@ function App(){
     e.preventDefault();e.currentTarget.classList.remove("drop-target","drop-target-blocked");
     if(!dragItem)return;
     if(isTempId(dragItem.id)){setError("Este elemento aún se está sincronizando. Intenta de nuevo en unos segundos.");setDragItem(null);fetchAll(token);return;}
+    if(pendingMoveIdsRef.current.has(dragItem.id)){setError("Ese movimiento aún se está guardando.");setDragItem(null);return;}
+    pendingMoveIdsRef.current.add(dragItem.id);
     if(dragItem.type==="reserva"){
       const r=reservas.find(x=>x.id===dragItem.id);
-      if(!r||r.consultorio===cons&&r.fecha===fecha&&r.franja===fi){setDragItem(null);return;}
+      if(!r||r.consultorio===cons&&r.fecha===fecha&&r.franja===fi){pendingMoveIdsRef.current.delete(dragItem.id);setDragItem(null);return;}
       // Optimista
       markLocalChange();
       setReservas(prev=>prev.map(x=>x.id===dragItem.id?{...x,consultorio:cons,fecha,franja:fi}:x));
@@ -308,6 +313,7 @@ function App(){
         const d=await api({action:"moverReserva",token,id:dragItem.id,consultorio:cons,fecha,franja:fi});
         if(!d.ok){setError(d.error);fetchAll(token);}
       }catch{setError("Error al mover.");fetchAll(token);}
+      finally{pendingMoveIdsRef.current.delete(dragItem.id);}
     } else {
       const b=bloqueos.find(x=>x.id===dragItem.id);
       if(b){
@@ -328,17 +334,22 @@ function App(){
               }
               setBloqueos(prev=>prev.map(x=>x.id===b.id?b:x));
               fetchAll(token);
+              pendingMoveIdsRef.current.delete(b.id);
               setDragItem(null);
               return;
             }
             setBloqueos(prev=>prev.map(x=>x.id===b.id?b:x));
             setError(d.error);
             fetchAll(token);
+            pendingMoveIdsRef.current.delete(b.id);
             setDragItem(null);
             return;
           }
           fetchAll(token);
         }catch{setError("Error al mover bloqueo.");fetchAll(token);}
+        finally{pendingMoveIdsRef.current.delete(b.id);}
+      }else{
+        pendingMoveIdsRef.current.delete(dragItem.id);
       }
     }
     setDragItem(null);
