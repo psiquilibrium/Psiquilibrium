@@ -315,17 +315,15 @@ function App(){
         setBloqueos(prev=>prev.map(x=>x.id===dragItem.id?{...x,consultorio:cons,fecha,franja:fi}:x));
         showToast("Bloqueo movido");
         try{
-          const del=await api({action:"eliminarBloqueo",token,id:b.id});
-          if(!del.ok){
+          const d=await api({action:"moverBloqueo",token,id:b.id,consultorio:cons,fecha,franja:fi});
+          if(!d.ok){
             setBloqueos(prev=>prev.map(x=>x.id===b.id?b:x));
-            setError(del.error);
+            setError(d.error);
             fetchAll(token);
             setDragItem(null);
             return;
           }
-          const d=await api({action:"crearBloqueo",token,consultorio:cons,fecha,franja:fi,duracion:b.duracion,nota:b.nota,repeticion:b.repeticion});
-          if(d.ok){setBloqueos(prev=>prev.map(x=>x.id===b.id?{...x,id:d.id}:x));fetchAll(token);}
-          else{setError(d.error);fetchAll(token);}
+          fetchAll(token);
         }catch{setError("Error al mover bloqueo.");fetchAll(token);}
       }
     }

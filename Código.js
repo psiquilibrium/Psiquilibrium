@@ -37,6 +37,7 @@ function handle(e) {
       case "moverReserva":           return resp(moverReserva(merged, token));
       case "copiarReserva":          return resp(copiarReserva(merged, token));
       case "crearBloqueo":           return resp(crearBloqueo(merged, token));
+      case "moverBloqueo":           return resp(moverBloqueo(merged, token));
       case "eliminarBloqueo":        return resp(eliminarBloqueo(merged, token));
       case "getBloqueos":            return resp(getBloqueos());
       case "generarPreestablecidas": return resp(generarPreestablecidas(merged, token));
@@ -390,6 +391,29 @@ function eliminarBloqueo(body, token) {
         sheet.getRange(i + 1, 7).setValue(false);
         invalidateAgendaCache();
         return { ok: true };
+      }
+    }
+    return { ok: false, error: "Bloqueo no encontrado" };
+  });
+}
+
+function moverBloqueo(body, token) {
+  return withWriteLock(function() {
+    const user = getUserFromToken(token);
+    if (user.rol !== "admin") return { ok: false, error: "Solo admin" };
+    const sheet = SpreadsheetApp.getActiveSpreadsheet().getSheetByName(SHEET_BLOQUEOS);
+    if (!sheet) return { ok: false, error: "No existe hoja de bloqueos" };
+    const data = sheet.getDataRange().getValues();
+    const consultorioVal = body.consultorio === "todos" ? "todos"
+      : (NOMBRES_CONSULTORIOS[Number(body.consultorio)] || String(body.consultorio));
+
+    for (let i = 1; i < data.length; i++) {
+      if (String(data[i][0]) === String(body.id)) {
+        sheet.getRange(i + 1, 2).setValue(consultorioVal);
+        sheet.getRange(i + 1, 3).setValue(body.franja);
+        sheet.getRange(i + 1, 4).setValue(body.fecha);
+        invalidateAgendaCache();
+        return { ok: true, id: String(body.id) };
       }
     }
     return { ok: false, error: "Bloqueo no encontrado" };
