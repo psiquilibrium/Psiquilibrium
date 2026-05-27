@@ -26,10 +26,66 @@ button:hover{background:var(--cyan-light);}
 button:disabled{opacity:0.5;cursor:default;}
 .drop-target{outline:2px dashed var(--cyan)!important;background:var(--cyan-light)!important;}
 .drop-target-blocked{outline:2px dashed var(--blocked-border)!important;background:var(--blocked)!important;}
+.app-topbar{position:sticky;top:0;z-index:20;margin:-1rem -1rem 16px;padding:12px 1rem;background:rgba(240,247,250,0.96);border-bottom:1px solid var(--border);backdrop-filter:blur(8px);}
+.topbar-row{display:flex;align-items:center;justify-content:space-between;gap:12px;}
+.brand-group{display:flex;align-items:center;gap:10px;min-width:220px;}
+.brand-mark{width:24px;height:24px;border:2px solid var(--cyan);border-radius:5px;transform:rotate(45deg);flex-shrink:0;background:#fff;}
+.brand-title{font-weight:800;font-size:17px;color:var(--navy);line-height:1;}
+.user-pill{display:flex;align-items:center;gap:7px;font-size:12px;background:#fff;border:1px solid var(--border);padding:5px 9px;border-radius:999px;color:var(--navy);box-shadow:0 1px 2px rgba(27,58,107,0.06);}
+.user-dot{width:8px;height:8px;border-radius:50%;background:var(--success);flex-shrink:0;}
+.user-role{text-transform:capitalize;color:var(--muted);font-weight:600;}
+.tabs{display:flex;gap:6px;flex-wrap:wrap;justify-content:flex-end;align-items:center;}
+.tab-button{font-size:12px;border-radius:999px;background:#fff;border-color:var(--border);color:var(--navy);font-weight:600;}
+.tab-button.active{background:var(--navy);border-color:var(--navy);color:#fff;box-shadow:0 2px 6px rgba(27,58,107,0.18);}
+.icon-button{min-width:36px;padding:7px 10px;border-radius:999px;background:#fff;}
+.notice{font-size:13px;margin-bottom:10px;padding:10px 12px;border-radius:10px;border:1px solid var(--border);display:flex;justify-content:space-between;gap:10px;align-items:center;line-height:1.35;}
+.notice-danger{background:var(--danger-bg);border-color:#f5c6c0;color:var(--danger);}
+.notice-info{background:var(--cyan-light);border-color:var(--cyan);color:var(--navy);}
+.floating-notice{position:fixed;z-index:999;padding:10px 14px;border-radius:10px;font-size:13px;border:1px solid var(--border);box-shadow:0 8px 24px rgba(27,58,107,0.14);display:flex;gap:10px;align-items:center;}
+.toast-notice{top:16px;right:16px;}
+.clipboard-notice{top:16px;left:50%;transform:translateX(-50%);}
+.section-head{display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:12px;flex-wrap:wrap;gap:10px;}
+.section-title{font-weight:700;font-size:16px;color:var(--navy);line-height:1.2;}
+.section-subtitle{font-size:12px;color:var(--muted);margin-top:3px;}
+.toolbar-actions{display:flex;gap:6px;flex-wrap:wrap;align-items:center;}
+.list-card{background:var(--white);border:1px solid var(--border);border-radius:10px;padding:0.85rem 1rem;margin-bottom:8px;display:flex;justify-content:space-between;align-items:center;gap:12px;box-shadow:0 1px 2px rgba(27,58,107,0.04);}
+.list-card.cancelled{background:#fafafa;}
+.list-card.syncing{opacity:0.58;}
+.list-main{min-width:0;flex:1;}
+.list-title{font-weight:700;font-size:13px;color:var(--navy);line-height:1.3;overflow-wrap:anywhere;}
+.list-title.cancelled{text-decoration:line-through;color:var(--cancelled-text);}
+.list-meta{font-size:12px;color:var(--muted);line-height:1.45;margin-top:3px;overflow-wrap:anywhere;}
+.list-actions{display:flex;gap:6px;flex-shrink:0;align-items:center;flex-wrap:wrap;justify-content:flex-end;}
+.status-chip{display:inline-flex;align-items:center;border-radius:999px;padding:3px 8px;font-size:11px;font-weight:700;white-space:nowrap;}
+.chip-success{background:var(--success-bg);color:var(--success);}
+.chip-danger{background:var(--danger-bg);color:var(--danger);}
+.chip-info{background:var(--cyan-light);color:var(--navy);}
+.chip-muted{background:#f5f7f8;color:var(--muted);}
+.filters-panel{background:var(--white);border:1px solid var(--border);border-radius:10px;padding:0.85rem;margin-bottom:12px;}
+.metric-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:8px;margin-bottom:12px;}
+.metric-card{background:var(--white);border:1px solid var(--border);border-radius:10px;padding:0.8rem 0.9rem;}
+.metric-value{font-size:24px;font-weight:800;line-height:1.1;margin-top:3px;}
 @media(max-width:720px){
   #root{padding:0.75rem;}
   button{min-height:42px;padding:9px 12px;}
   input,select{min-height:42px;font-size:16px;}
+  .app-topbar{margin:-0.75rem -0.75rem 14px;padding:10px 0.75rem;}
+  .topbar-row{align-items:flex-start;flex-direction:column;}
+  .brand-group{width:100%;min-width:0;justify-content:space-between;align-items:flex-start;}
+  .brand-title{font-size:16px;}
+  .user-pill{max-width:100%;font-size:11px;}
+  .tabs{width:100%;flex-wrap:nowrap;overflow-x:auto;justify-content:flex-start;padding-bottom:4px;-webkit-overflow-scrolling:touch;}
+  .tab-button{flex:0 0 auto;}
+  .notice{align-items:flex-start;}
+  .floating-notice{left:12px;right:12px;transform:none;justify-content:space-between;}
+  .toast-notice{top:10px;}
+  .clipboard-notice{top:64px;}
+  .section-head{align-items:stretch;}
+  .toolbar-actions{width:100%;}
+  .toolbar-actions button{flex:1 1 auto;}
+  .list-card{align-items:flex-start;flex-direction:column;padding:0.85rem;}
+  .list-actions{width:100%;justify-content:flex-start;}
+  .list-actions button{flex:1 1 auto;}
 }
 </style>
 </head>
@@ -829,6 +885,7 @@ function App(){
   const accionTexto={crear:"Creada",editar:"Editada",mover:"Movida",cancelar:"Cancelada",reconfirmar:"Reconfirmada",eliminar:"Eliminada",respaldo:"Respaldo"};
   const accionColor={crear:"var(--success)",editar:"var(--navy)",mover:"#9B3FA0",cancelar:"var(--danger)",reconfirmar:"var(--success)",eliminar:"var(--muted)",respaldo:"var(--blocked-border)"};
   const tipoTexto={reserva:"Reserva",bloqueo:"Bloqueo",sistema:"Sistema"};
+  const viewLabels={"consolidada":"Agenda","semana":"Semana","mis reservas":"Mis reservas",todas:"Todas",reportes:"Reportes",actividad:"Actividad"};
   const renderEjemplos=items=>(items||[]).slice(0,3).map((x,i)=>{
     const filas=x.items?x.items.map(it=>it.fila).join(", "):x.fila;
     const detalle=x.items?`${x.tipo} (${x.cantidad})`:x.problemas.join(", ");
@@ -838,27 +895,35 @@ function App(){
 
   return(
     <div style={{paddingBottom:"2rem"}}>
-      {toast&&<div style={{position:"fixed",top:16,right:16,zIndex:999,padding:"10px 18px",borderRadius:8,background:toast.type==="danger"?"var(--danger-bg)":"var(--success-bg)",color:toast.type==="danger"?"var(--danger)":"var(--success)",fontSize:13,border:`1px solid ${toast.type==="danger"?"#f5c6c0":"#9fe1cb"}`}}>{toast.msg}</div>}
-      {clipboard&&<div style={{position:"fixed",top:16,left:"50%",transform:"translateX(-50%)",zIndex:999,padding:"10px 18px",borderRadius:8,background:"#e8f7fc",color:"var(--navy)",fontSize:13,border:"1px solid var(--cyan)",display:"flex",gap:12,alignItems:"center"}}>
-        📋 Modo pegar — haz clic en la celda destino <button onClick={()=>setClipboard(null)} style={{fontSize:11,padding:"3px 8px"}}>Cancelar</button>
+      {toast&&<div className={`floating-notice toast-notice ${toast.type==="danger"?"notice-danger":"chip-success"}`}>{toast.msg}</div>}
+      {clipboard&&<div className="floating-notice clipboard-notice notice-info">
+        <span>📋 Modo pegar: haz clic en la celda destino</span><button onClick={()=>setClipboard(null)} style={{fontSize:11,padding:"3px 8px"}}>Cancelar</button>
       </div>}
 
-      <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:16,flexWrap:"wrap",gap:8,paddingTop:"0.5rem"}}>
-        <div style={{display:"flex",alignItems:"center",gap:10}}>
-          <div style={{width:24,height:24,border:"2px solid var(--cyan)",borderRadius:5,transform:"rotate(45deg)",flexShrink:0}}></div>
-          <span style={{fontWeight:700,fontSize:17,color:"var(--navy)"}}>Psiquilibrium</span>
-          <span style={{fontSize:12,background:"var(--cyan-light)",padding:"2px 8px",borderRadius:6,color:"var(--navy)"}}>{currentUser.nombre} · {currentUser.rol}</span>
-        </div>
-        <div style={{display:"flex",gap:6,flexWrap:"wrap"}}>
-          {["consolidada","semana","mis reservas",...(canViewAllReservations?["todas"]:[]),...(canViewReports?["reportes"]:[]),...(canViewActivity?["actividad"]:[])].map(v=>(
-            <button key={v} onClick={()=>setView(v)} style={{fontSize:12,background:view===v?"var(--navy)":"transparent",color:view===v?"#fff":"var(--navy)",border:`1px solid ${view===v?"var(--navy)":"var(--border)"}`}}>{v.charAt(0).toUpperCase()+v.slice(1)}</button>
-          ))}
-          <button onClick={()=>view==="actividad"?fetchAuditoria():view==="reportes"?fetchReporte():fetchAll(token)} style={{fontSize:12,color:"var(--muted)"}} title="Actualizar">↺</button>
-          <button onClick={()=>{sessionStorage.removeItem(SESSION_KEY);setScreen("login");setCurrentUser(null);setToken(null);}} style={{fontSize:12,color:"var(--muted)"}}>Salir</button>
+      <div className="app-topbar">
+        <div className="topbar-row">
+          <div className="brand-group">
+            <div style={{display:"flex",alignItems:"center",gap:10}}>
+              <div className="brand-mark"></div>
+              <span className="brand-title">Psiquilibrium</span>
+            </div>
+            <div className="user-pill" title={`${currentUser.nombre} · ${currentUser.rol}`}>
+              <span className="user-dot"></span>
+              <span style={{fontWeight:700,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{currentUser.nombre}</span>
+              <span className="user-role">{currentUser.rol}</span>
+            </div>
+          </div>
+          <div className="tabs">
+            {["consolidada","semana","mis reservas",...(canViewAllReservations?["todas"]:[]),...(canViewReports?["reportes"]:[]),...(canViewActivity?["actividad"]:[])].map(v=>(
+              <button key={v} onClick={()=>setView(v)} className={`tab-button ${view===v?"active":""}`}>{viewLabels[v]}</button>
+            ))}
+            <button onClick={()=>view==="actividad"?fetchAuditoria():view==="reportes"?fetchReporte():fetchAll(token)} className="icon-button" style={{fontSize:12,color:"var(--muted)"}} title="Actualizar">↺</button>
+            <button onClick={()=>{sessionStorage.removeItem(SESSION_KEY);setScreen("login");setCurrentUser(null);setToken(null);}} className="icon-button" style={{fontSize:12,color:"var(--muted)"}}>Salir</button>
+          </div>
         </div>
       </div>
 
-      {error&&<div style={{fontSize:12,color:"var(--danger)",marginBottom:8,padding:"8px 12px",background:"var(--danger-bg)",borderRadius:8}}>{error}<button onClick={()=>setError(null)} style={{fontSize:11,marginLeft:8}}>✕</button></div>}
+      {error&&<div className="notice notice-danger"><span>{error}</span><button onClick={()=>setError(null)} style={{fontSize:11,padding:"4px 8px"}}>✕</button></div>}
 
       {/* ── CONSOLIDADA ── */}
       {view==="consolidada"&&(
@@ -990,19 +1055,29 @@ function App(){
       {/* ── MIS RESERVAS ── */}
       {view==="mis reservas"&&(
         <div>
-          <div style={{fontWeight:600,marginBottom:12,fontSize:14,color:"var(--navy)"}}>Mis reservas</div>
+          <div className="section-head">
+            <div>
+              <div className="section-title">Mis reservas</div>
+              <div className="section-subtitle">Reservas vigentes y próximas</div>
+            </div>
+          </div>
           {misReservas.length===0&&<p style={s.muted}>No tienes reservas vigentes o próximas.</p>}
           {misReservas.map(r=>{
             const cancelled=r.estado==="cancelada";
             const syncing=isSyncing(r.id);
             const syncLabel=getSyncLabel(r.id);
             return(
-              <div key={r.id} style={{...s.card,marginBottom:8,display:"flex",justifyContent:"space-between",alignItems:"center",borderLeft:`3px solid ${cancelled?"#ccc":getUserColor(r.userId)}`,opacity:syncing?0.5:cancelled?0.7:1}}>
-                <div>
-                  <div style={{fontWeight:600,fontSize:13,color:"var(--navy)",textDecoration:cancelled?"line-through":"none"}}>{CONS[r.consultorio]} · {FRANJAS[r.franja]} – {FRANJAS[r.franja+r.duracion/30]||"18:00"}</div>
-                  <div style={s.muted}>{r.fecha}{r.nota?` · ${r.nota}`:""}{cancelled?" · CANCELADA":""}{r.tipo==="preestablecida"?" · (fija)":""}{syncing?` · ${syncLabel}`:""}</div>
+              <div key={r.id} className={`list-card ${cancelled?"cancelled":""} ${syncing?"syncing":""}`} style={{borderLeft:`4px solid ${cancelled?"#ccc":getUserColor(r.userId)}`}}>
+                <div className="list-main">
+                  <div style={{display:"flex",gap:8,alignItems:"center",flexWrap:"wrap",marginBottom:2}}>
+                    <div className={`list-title ${cancelled?"cancelled":""}`}>{CONS[r.consultorio]} · {FRANJAS[r.franja]} – {FRANJAS[r.franja+r.duracion/30]||"18:00"}</div>
+                    {cancelled&&<span className="status-chip chip-danger">Cancelada</span>}
+                    {r.tipo==="preestablecida"&&<span className="status-chip chip-info">Fija</span>}
+                    {syncing&&<span className="status-chip chip-muted">{syncLabel}</span>}
+                  </div>
+                  <div className="list-meta">{r.fecha}{r.nota?` · ${r.nota}`:""}</div>
                 </div>
-                <div style={{display:"flex",gap:6,flexShrink:0}}>
+                <div className="list-actions">
                   {!cancelled&&<button onClick={()=>handleEstado(r.id,"cancelada")} disabled={syncing} style={{fontSize:11,color:"var(--danger)",background:"var(--danger-bg)",border:"1px solid #f5c6c0"}}>✗ Cancelar</button>}
                   {cancelled&&<button onClick={()=>handleDelete(r.id)} disabled={syncing} style={{fontSize:11,color:"var(--muted)",background:"#f5f5f5",border:"1px solid #ddd"}}>🗑 Eliminar</button>}
                 </div>
@@ -1015,18 +1090,18 @@ function App(){
       {/* ── TODAS ── */}
       {view==="todas"&&canViewAllReservations&&(
         <div>
-          <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:10,flexWrap:"wrap",gap:8}}>
+          <div className="section-head">
             <div>
-              <div style={{fontWeight:600,fontSize:14,color:"var(--navy)"}}>Todas las reservas ({reservasFiltradas.length} de {todasReservas.length})</div>
-              <div style={s.muted}>Confirmadas: {conteoFiltrado.confirmadas} · Canceladas: {conteoFiltrado.canceladas}</div>
+              <div className="section-title">Todas las reservas</div>
+              <div className="section-subtitle">{reservasFiltradas.length} de {todasReservas.length} visibles · Confirmadas: {conteoFiltrado.confirmadas} · Canceladas: {conteoFiltrado.canceladas}</div>
             </div>
-            {(canCreateBackup||isAdmin)&&<div style={{display:"flex",gap:6,flexWrap:"wrap"}}>
+            {(canCreateBackup||isAdmin)&&<div className="toolbar-actions">
               {canCreateBackup&&<button onClick={handleCrearRespaldo} disabled={loading} style={{fontSize:12,background:"#fff",color:"var(--navy)",border:"1px solid var(--border)"}}>Crear respaldo</button>}
               {isAdmin&&<button onClick={handleDiagnostico} disabled={loading} style={{fontSize:12,background:"#fff",color:"var(--navy)",border:"1px solid var(--border)"}}>Diagnosticar datos</button>}
               {isAdmin&&<button onClick={async()=>{setLoading(true);try{const d=await api({action:"generarPreestablecidas",token});if(d.ok){await fetchAll(token);showToast(`${d.creadas} reservas fijas generadas`);}else setError(d.error);}catch{setError("Error.");}setLoading(false);}} style={{fontSize:12,background:"var(--cyan-light)",color:"var(--navy)"}}>⚡ Generar reservas fijas</button>}
             </div>}
           </div>
-          <div style={{...s.card,padding:"0.75rem",marginBottom:12}}>
+          <div className="filters-panel">
             <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(135px,1fr))",gap:8,alignItems:"end"}}>
               <div><label style={s.label}>Profesional</label>
                 <select value={todasFiltros.profesional} onChange={e=>setTodasFiltros(f=>({...f,profesional:e.target.value}))}>
@@ -1095,12 +1170,17 @@ function App(){
             const syncing=isSyncing(r.id);
             const syncLabel=getSyncLabel(r.id);
             return(
-              <div key={r.id} style={{...s.card,borderLeft:`3px solid ${cancelled?"#ccc":color}`,marginBottom:8,display:"flex",justifyContent:"space-between",alignItems:"center",opacity:syncing?0.5:cancelled?0.7:1}}>
-                <div style={{flex:1}}>
-                  <div style={{fontWeight:600,fontSize:13,color:"var(--navy)",textDecoration:cancelled?"line-through":"none"}}>{CONS[r.consultorio]} · {FRANJAS[r.franja]} – {FRANJAS[r.franja+r.duracion/30]||"18:00"}</div>
-                  <div style={s.muted}>{r.fecha} · {u?.nombre||r.userId}{r.nota?` · ${r.nota}`:""}{r.tipo==="preestablecida"?" · (fija)":""}{cancelled?" · CANCELADA":""}{syncing?` · ${syncLabel}`:""}</div>
+              <div key={r.id} className={`list-card ${cancelled?"cancelled":""} ${syncing?"syncing":""}`} style={{borderLeft:`4px solid ${cancelled?"#ccc":color}`}}>
+                <div className="list-main">
+                  <div style={{display:"flex",gap:8,alignItems:"center",flexWrap:"wrap",marginBottom:2}}>
+                    <div className={`list-title ${cancelled?"cancelled":""}`}>{CONS[r.consultorio]} · {FRANJAS[r.franja]} – {FRANJAS[r.franja+r.duracion/30]||"18:00"}</div>
+                    {cancelled?<span className="status-chip chip-danger">Cancelada</span>:<span className="status-chip chip-success">Confirmada</span>}
+                    {r.tipo==="preestablecida"&&<span className="status-chip chip-info">Fija</span>}
+                    {syncing&&<span className="status-chip chip-muted">{syncLabel}</span>}
+                  </div>
+                  <div className="list-meta">{r.fecha} · {u?.nombre||r.userId}{r.nota?` · ${r.nota}`:""}</div>
                 </div>
-                <div style={{display:"flex",gap:6,flexShrink:0}}>
+                <div className="list-actions">
                   {canOperateReservations&&!cancelled&&<button onClick={()=>handleEstado(r.id,"cancelada")} disabled={syncing} style={{fontSize:11,color:"var(--danger)",background:"var(--danger-bg)",border:"1px solid #f5c6c0"}}>✗</button>}
                   {isAdmin&&cancelled&&<button onClick={()=>handleEstado(r.id,"confirmada")} disabled={syncing} style={{fontSize:11,color:"var(--success)",background:"var(--success-bg)",border:"1px solid #9fe1cb"}}>✓</button>}
                   {isAdmin&&cancelled&&<button onClick={()=>handleDelete(r.id)} disabled={syncing} style={{fontSize:11,color:"var(--muted)",background:"#f5f5f5",border:"1px solid #ddd"}}>🗑</button>}
@@ -1114,17 +1194,17 @@ function App(){
       {/* ── REPORTES ── */}
       {view==="reportes"&&canViewReports&&(
         <div>
-          <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:10,flexWrap:"wrap",gap:8}}>
+          <div className="section-head">
             <div>
-              <div style={{fontWeight:600,fontSize:14,color:"var(--navy)"}}>Reportes</div>
-              <div style={s.muted}>{reporte?`${reporte.desde} a ${reporte.hasta}`:"Resumen de reservas por periodo"}</div>
+              <div className="section-title">Reportes</div>
+              <div className="section-subtitle">{reporte?`${reporte.desde} a ${reporte.hasta}`:"Resumen de reservas por periodo"}</div>
             </div>
-            <div style={{display:"flex",gap:6,flexWrap:"wrap"}}>
+            <div className="toolbar-actions">
               <button onClick={fetchReporte} disabled={reporteLoading} style={{fontSize:12,background:"#fff",color:"var(--navy)",border:"1px solid var(--border)"}}>{reporteLoading?"Cargando...":"Actualizar"}</button>
               <button onClick={exportReporteCSV} disabled={!reporte||reporteLoading} style={{fontSize:12,background:"var(--cyan-light)",color:"var(--navy)",border:"1px solid var(--border)"}}>Exportar CSV</button>
             </div>
           </div>
-          <div style={{...s.card,padding:"0.75rem",marginBottom:12}}>
+          <div className="filters-panel">
             <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(145px,1fr))",gap:8,alignItems:"end"}}>
               <div><label style={s.label}>Periodo</label>
                 <select value={reporteFiltros.periodo} onChange={e=>setReporteFiltros(f=>({...f,periodo:e.target.value}))}>
@@ -1145,22 +1225,25 @@ function App(){
               </div>
             </div>
           </div>
-          {reporteError&&<div style={{...s.card,borderLeft:"3px solid var(--danger)",marginBottom:10,color:"var(--danger)",fontSize:13}}>{reporteError}</div>}
+          {reporteError&&<div className="notice notice-danger"><span>{reporteError}</span></div>}
           {!reporteError&&reporteLoading&&!reporte&&<p style={s.muted}>Cargando reporte...</p>}
           {reporte&&(<>
-            <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(140px,1fr))",gap:8,marginBottom:12}}>
-              <div style={{...s.card,padding:"0.75rem"}}><div style={s.muted}>Confirmadas</div><div style={{fontSize:24,fontWeight:700,color:"var(--success)"}}>{reporte.resumen.confirmadas}</div></div>
-              <div style={{...s.card,padding:"0.75rem"}}><div style={s.muted}>Canceladas</div><div style={{fontSize:24,fontWeight:700,color:"var(--danger)"}}>{reporte.resumen.canceladas}</div></div>
-              <div style={{...s.card,padding:"0.75rem"}}><div style={s.muted}>Total</div><div style={{fontSize:24,fontWeight:700,color:"var(--navy)"}}>{reporte.resumen.total}</div></div>
+            <div className="metric-grid">
+              <div className="metric-card"><div style={s.muted}>Confirmadas</div><div className="metric-value" style={{color:"var(--success)"}}>{reporte.resumen.confirmadas}</div></div>
+              <div className="metric-card"><div style={s.muted}>Canceladas</div><div className="metric-value" style={{color:"var(--danger)"}}>{reporte.resumen.canceladas}</div></div>
+              <div className="metric-card"><div style={s.muted}>Total</div><div className="metric-value" style={{color:"var(--navy)"}}>{reporte.resumen.total}</div></div>
             </div>
             <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(260px,1fr))",gap:12}}>
               <div>
                 <div style={{fontWeight:600,fontSize:13,color:"var(--navy)",marginBottom:6}}>Por profesional</div>
                 {(reporte.porProfesional||[]).length===0&&<p style={s.muted}>Sin reservas en este periodo.</p>}
                 {(reporte.porProfesional||[]).map(x=>(
-                  <div key={x.id} style={{...s.card,padding:"0.7rem",marginBottom:7}}>
-                    <div style={{display:"flex",justifyContent:"space-between",gap:8,fontSize:13,fontWeight:600,color:"var(--navy)"}}><span>{x.nombre}</span><span>{x.total}</span></div>
-                    <div style={s.muted}>Confirmadas: {x.confirmadas} · Canceladas: {x.canceladas}</div>
+                  <div key={x.id} className="list-card" style={{padding:"0.7rem",marginBottom:7}}>
+                    <div className="list-main">
+                      <div className="list-title">{x.nombre}</div>
+                      <div className="list-meta">Confirmadas: {x.confirmadas} · Canceladas: {x.canceladas}</div>
+                    </div>
+                    <span className="status-chip chip-info">{x.total}</span>
                   </div>
                 ))}
               </div>
@@ -1168,9 +1251,12 @@ function App(){
                 <div style={{fontWeight:600,fontSize:13,color:"var(--navy)",marginBottom:6}}>Por consultorio</div>
                 {(reporte.porConsultorio||[]).length===0&&<p style={s.muted}>Sin reservas en este periodo.</p>}
                 {(reporte.porConsultorio||[]).map(x=>(
-                  <div key={x.consultorio} style={{...s.card,padding:"0.7rem",marginBottom:7}}>
-                    <div style={{display:"flex",justifyContent:"space-between",gap:8,fontSize:13,fontWeight:600,color:"var(--navy)"}}><span>{x.consultorio}</span><span>{x.total}</span></div>
-                    <div style={s.muted}>Confirmadas: {x.confirmadas} · Canceladas: {x.canceladas}</div>
+                  <div key={x.consultorio} className="list-card" style={{padding:"0.7rem",marginBottom:7}}>
+                    <div className="list-main">
+                      <div className="list-title">{x.consultorio}</div>
+                      <div className="list-meta">Confirmadas: {x.confirmadas} · Canceladas: {x.canceladas}</div>
+                    </div>
+                    <span className="status-chip chip-info">{x.total}</span>
                   </div>
                 ))}
               </div>
@@ -1182,16 +1268,16 @@ function App(){
       {/* ── ACTIVIDAD ── */}
       {view==="actividad"&&canViewActivity&&(
         <div>
-          <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:10,flexWrap:"wrap",gap:8}}>
+          <div className="section-head">
             <div>
-              <div style={{fontWeight:600,fontSize:14,color:"var(--navy)"}}>Actividad</div>
-              <div style={s.muted}>{eventosActividad.length} eventos visibles de {auditoria.length} cargados</div>
+              <div className="section-title">Actividad</div>
+              <div className="section-subtitle">{eventosActividad.length} eventos visibles de {auditoria.length} cargados</div>
             </div>
             <button onClick={fetchAuditoria} disabled={auditoriaLoading} style={{fontSize:12,background:"#fff",color:"var(--navy)",border:"1px solid var(--border)"}}>
               {auditoriaLoading?"Cargando...":"Actualizar"}
             </button>
           </div>
-          <div style={{...s.card,padding:"0.75rem",marginBottom:12}}>
+          <div className="filters-panel">
             <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(145px,1fr))",gap:8,alignItems:"end"}}>
               <div><label style={s.label}>Tipo</label>
                 <select value={actividadFiltros.tipo} onChange={e=>setActividadFiltros(f=>({...f,tipo:e.target.value}))}>
@@ -1222,19 +1308,19 @@ function App(){
               <button onClick={()=>setActividadFiltros({tipo:"todos",accion:"todas",periodo:"7"})} style={{fontSize:12,color:"var(--muted)"}}>Limpiar</button>
             </div>
           </div>
-          {auditoriaError&&<div style={{...s.card,borderLeft:"3px solid var(--danger)",marginBottom:10,color:"var(--danger)",fontSize:13}}>{auditoriaError}</div>}
+          {auditoriaError&&<div className="notice notice-danger"><span>{auditoriaError}</span></div>}
           {!auditoriaError&&auditoriaLoading&&auditoria.length===0&&<p style={s.muted}>Cargando actividad...</p>}
           {!auditoriaLoading&&eventosActividad.length===0&&!auditoriaError&&<p style={s.muted}>No hay actividad con esos filtros.</p>}
           {eventosActividad.map((ev,i)=>(
-            <div key={`${ev.timestamp}-${ev.elementoId}-${i}`} style={{...s.card,marginBottom:8,borderLeft:`3px solid ${accionColor[ev.accion]||"var(--border)"}`}}>
-              <div style={{display:"flex",justifyContent:"space-between",gap:8,alignItems:"flex-start",flexWrap:"wrap",marginBottom:4}}>
-                <div style={{fontWeight:600,fontSize:13,color:"var(--navy)",lineHeight:1.35}}>{`${ev.nombre||ev.userId||"Usuario"} ${ev.resumen||"realizó un cambio"}`}</div>
-                <span style={{fontSize:11,background:"var(--cyan-light)",color:"var(--navy)",padding:"2px 8px",borderRadius:6,whiteSpace:"nowrap"}}>
-                  {accionTexto[ev.accion]||ev.accion||"Actividad"}
-                </span>
-              </div>
-              <div style={{...s.muted,lineHeight:1.45}}>
-                {tipoTexto[ev.tipo]||"Actividad"} · {ev.timestamp}
+            <div key={`${ev.timestamp}-${ev.elementoId}-${i}`} className="list-card" style={{borderLeft:`4px solid ${accionColor[ev.accion]||"var(--border)"}`}}>
+              <div className="list-main">
+                <div style={{display:"flex",justifyContent:"space-between",gap:8,alignItems:"flex-start",flexWrap:"wrap",marginBottom:4}}>
+                  <div className="list-title">{`${ev.nombre||ev.userId||"Usuario"} ${ev.resumen||"realizó un cambio"}`}</div>
+                  <span className="status-chip chip-info">{accionTexto[ev.accion]||ev.accion||"Actividad"}</span>
+                </div>
+                <div className="list-meta">
+                  {tipoTexto[ev.tipo]||"Actividad"} · {ev.timestamp}
+                </div>
               </div>
             </div>
           ))}
