@@ -31,6 +31,7 @@ function handle(e) {
       case "getAgenda":              return resp(getAgenda(merged));
       case "getAgendaVersion":       return resp(getAgendaVersion(merged));
       case "getReservas":            return resp(getReservas());
+      case "getReporteReservas":     return resp(getReporteReservas(merged, token));
       case "crearReserva":           return resp(crearReserva(merged, token));
       case "editarReserva":          return resp(editarReserva(merged, token));
       case "eliminarReserva":        return resp(eliminarReserva(merged, token));
@@ -107,6 +108,10 @@ function puedeCrearRespaldo(user) {
   return user.rol === "admin" || user.rol === "socio";
 }
 
+function puedeVerReportes(user) {
+  return user.rol === "admin" || user.rol === "socio";
+}
+
 function getUserNameById(userId) {
   const sheet = SpreadsheetApp.getActiveSpreadsheet().getSheetByName(SHEET_USUARIOS);
   if (!sheet) return String(userId || "");
@@ -170,6 +175,71 @@ function getReservas() {
     if (reserva) reservas.push(reserva);
   }
   return { ok: true, reservas };
+}
+
+function getReporteReservas(body, token) {
+  const user = getUserFromToken(token);
+  if (!puedeVerReportes(user)) return { ok: false, error: "Sin permiso" };
+
+  const desde = String(body.desde || "").slice(0, 10);
+  const hasta = String(body.hasta || "").slice(0, 10);
+  const profesional = String(body.profesional || "todos");
+  if (!esFechaValida(desde) || !esFechaValida(hasta) || desde > hasta) return { ok: false, error: "Rango inválido" };
+
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  const sheet = ss.getSheetByName(SHEET_RESERVAS);
+  if (!sheet) return { ok: false, error: "No existe hoja de reservas" };
+
+  const nombres = getUserNamesMap(ss);
+  const data = sheet.getDataRange().getValues();
+  const resumen = { confirmadas: 0, canceladas: 0, total: 0 };
+  const porProfesional = {};
+  const porConsultorio = {};
+
+  for (let i = 1; i < data.length; i++) {
+    const reserva = reservaFromRow(data[i]);
+    if (!reserva) continue;
+    if (reserva.fecha < desde || reserva.fecha > hasta) continue;
+    if (profesional !== "todos" && reserva.userId !== profesional) continue;
+
+    const estado = reserva.estado === "cancelada" ? "canceladas" : "confirmadas";
+    resumen[estado]++;
+    resumen.total++;
+
+    if (!porProfesional[reserva.userId]) {
+      porProfesional[reserva.userId] = { id: reserva.userId, nombre: nombres[reserva.userId] || reserva.userId, confirmadas: 0, canceladas: 0, total: 0 };
+    }
+    porProfesional[reserva.userId][estado]++;
+    porProfesional[reserva.userId].total++;
+
+    const consultorioNombre = NOMBRES_CONSULTORIOS[Number(reserva.consultorio)] || String(reserva.consultorio);
+    if (!porConsultorio[consultorioNombre]) {
+      porConsultorio[consultorioNombre] = { consultorio: consultorioNombre, confirmadas: 0, canceladas: 0, total: 0 };
+    }
+    porConsultorio[consultorioNombre][estado]++;
+    porConsultorio[consultorioNombre].total++;
+  }
+
+  return {
+    ok: true,
+    desde,
+    hasta,
+    profesional,
+    resumen,
+    porProfesional: Object.values(porProfesional).sort((a, b) => b.total - a.total || a.nombre.localeCompare(b.nombre)),
+    porConsultorio: Object.values(porConsultorio).sort((a, b) => a.consultorio.localeCompare(b.consultorio))
+  };
+}
+
+function getUserNamesMap(ss) {
+  const sheet = ss.getSheetByName(SHEET_USUARIOS);
+  const map = {};
+  if (!sheet) return map;
+  const data = sheet.getDataRange().getValues();
+  for (let i = 1; i < data.length; i++) {
+    if (data[i][0]) map[String(data[i][0])] = String(data[i][1] || data[i][0]);
+  }
+  return map;
 }
 
 function getAgenda(body) {

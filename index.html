@@ -81,10 +81,14 @@ function App(){
   const [auditoria,setAuditoria]=useState([]);
   const [auditoriaLoading,setAuditoriaLoading]=useState(false);
   const [auditoriaError,setAuditoriaError]=useState(null);
+  const [reporte,setReporte]=useState(null);
+  const [reporteLoading,setReporteLoading]=useState(false);
+  const [reporteError,setReporteError]=useState(null);
   const [form,setForm]=useState({nota:"",franjaInicio:"0",franjaFin:"2",profesionalId:""});
   const [bForm,setBForm]=useState({nota:"",franjaInicio:"0",franjaFin:"2",repeticion:"ninguna",consultorio:"0"});
   const [todasFiltros,setTodasFiltros]=useState({profesional:"todos",consultorio:"todos",estado:"todos",texto:"",alcance:"semana",desde:"",hasta:""});
   const [actividadFiltros,setActividadFiltros]=useState({tipo:"todos",accion:"todas",periodo:"7"});
+  const [reporteFiltros,setReporteFiltros]=useState({periodo:"semana",desde:"",hasta:"",profesional:"todos"});
   const [conflict,setConflict]=useState(false);
   const [loginForm,setLoginForm]=useState({userId:"",password:""});
   const [dragItem,setDragItem]=useState(null); // {type:"reserva"|"bloqueo", id}
@@ -119,6 +123,7 @@ function App(){
   const canViewAllReservations=isSocio||isAssistant;
   const canViewActivity=isSocio||isAssistant;
   const canCreateBackup=isSocio;
+  const canViewReports=isSocio;
 
   const showToast=(msg,type="success")=>{setToast({msg,type});setTimeout(()=>setToast(null),3000);};
   const userMeta=useMemo(()=>{
@@ -224,9 +229,37 @@ function App(){
     setAuditoriaLoading(false);
   },[token]);
 
+  const getReporteRango=useCallback(()=>{
+    const today=new Date();
+    if(reporteFiltros.periodo==="semana"){
+      const days=getWeekDates(today);
+      return {desde:dateKey(days[0]),hasta:dateKey(days[5])};
+    }
+    if(reporteFiltros.periodo==="mes"){
+      const desde=new Date(today.getFullYear(),today.getMonth(),1);
+      const hasta=new Date(today.getFullYear(),today.getMonth()+1,0);
+      return {desde:dateKey(desde),hasta:dateKey(hasta)};
+    }
+    return {desde:reporteFiltros.desde,hasta:reporteFiltros.hasta};
+  },[reporteFiltros]);
+
+  const fetchReporte=useCallback(async()=>{
+    if(!token||!canViewReports)return;
+    const {desde,hasta}=getReporteRango();
+    if(!desde||!hasta){setReporteError("Selecciona fecha inicial y final.");return;}
+    setReporteLoading(true);
+    setReporteError(null);
+    try{
+      const d=await api({action:"getReporteReservas",token,desde,hasta,profesional:reporteFiltros.profesional});
+      if(d.ok)setReporte(d);
+      else setReporteError(d.error||"No se pudo cargar el reporte.");
+    }catch{setReporteError("Error al cargar reporte.");}
+    setReporteLoading(false);
+  },[token,canViewReports,getReporteRango,reporteFiltros.profesional]);
+
   useEffect(()=>{
     if(screen==="app"&&token){
-      if(view==="actividad")return;
+      if(view==="actividad"||view==="reportes")return;
       fetchAll(token);
       const pollMs=view==="mis reservas"||view==="todas"?120000:30000;
       pollRef.current=setInterval(()=>{if(!document.hidden)refreshIfNeeded(token);},pollMs);
@@ -243,6 +276,10 @@ function App(){
   useEffect(()=>{
     if(screen==="app"&&token&&view==="actividad")fetchAuditoria();
   },[screen,token,view,fetchAuditoria]);
+
+  useEffect(()=>{
+    if(screen==="app"&&token&&view==="reportes")fetchReporte();
+  },[screen,token,view]);
 
   const handleLogin=async()=>{
     setError(null);setLoading(true);
@@ -498,6 +535,30 @@ function App(){
       }else setError(d.error||"No se pudo crear el respaldo.");
     }catch{setError("Error al crear respaldo.");}
     setLoading(false);
+  };
+
+  const exportReporteCSV=()=>{
+    if(!reporte)return;
+    const esc=v=>`"${String(v??"").replace(/"/g,'""')}"`;
+    const rows=[
+      ["Reporte de reservas",reporte.desde,reporte.hasta],
+      [],
+      ["Resumen","Confirmadas","Canceladas","Total"],
+      ["Reservas",reporte.resumen.confirmadas,reporte.resumen.canceladas,reporte.resumen.total],
+      [],
+      ["Por profesional","Confirmadas","Canceladas","Total"],
+      ...(reporte.porProfesional||[]).map(x=>[x.nombre,x.confirmadas,x.canceladas,x.total]),
+      [],
+      ["Por consultorio","Confirmadas","Canceladas","Total"],
+      ...(reporte.porConsultorio||[]).map(x=>[x.consultorio,x.confirmadas,x.canceladas,x.total])
+    ];
+    const csv=rows.map(row=>row.map(esc).join(",")).join("\n");
+    const url=URL.createObjectURL(new Blob([csv],{type:"text/csv;charset=utf-8"}));
+    const a=document.createElement("a");
+    a.href=url;
+    a.download=`reporte_reservas_${reporte.desde}_${reporte.hasta}.csv`;
+    a.click();
+    URL.revokeObjectURL(url);
   };
 
   const openCell=(cons,fecha,fi)=>{
@@ -773,10 +834,10 @@ function App(){
           <span style={{fontSize:12,background:"var(--cyan-light)",padding:"2px 8px",borderRadius:6,color:"var(--navy)"}}>{currentUser.nombre} · {currentUser.rol}</span>
         </div>
         <div style={{display:"flex",gap:6,flexWrap:"wrap"}}>
-          {["consolidada","semana","mis reservas",...(canViewAllReservations?["todas"]:[]),...(canViewActivity?["actividad"]:[])].map(v=>(
+          {["consolidada","semana","mis reservas",...(canViewAllReservations?["todas"]:[]),...(canViewReports?["reportes"]:[]),...(canViewActivity?["actividad"]:[])].map(v=>(
             <button key={v} onClick={()=>setView(v)} style={{fontSize:12,background:view===v?"var(--navy)":"transparent",color:view===v?"#fff":"var(--navy)",border:`1px solid ${view===v?"var(--navy)":"var(--border)"}`}}>{v.charAt(0).toUpperCase()+v.slice(1)}</button>
           ))}
-          <button onClick={()=>view==="actividad"?fetchAuditoria():fetchAll(token)} style={{fontSize:12,color:"var(--muted)"}} title="Actualizar">↺</button>
+          <button onClick={()=>view==="actividad"?fetchAuditoria():view==="reportes"?fetchReporte():fetchAll(token)} style={{fontSize:12,color:"var(--muted)"}} title="Actualizar">↺</button>
           <button onClick={()=>{sessionStorage.removeItem(SESSION_KEY);setScreen("login");setCurrentUser(null);setToken(null);}} style={{fontSize:12,color:"var(--muted)"}}>Salir</button>
         </div>
       </div>
@@ -1028,6 +1089,74 @@ function App(){
               </div>
             );
           })}
+        </div>
+      )}
+
+      {/* ── REPORTES ── */}
+      {view==="reportes"&&canViewReports&&(
+        <div>
+          <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:10,flexWrap:"wrap",gap:8}}>
+            <div>
+              <div style={{fontWeight:600,fontSize:14,color:"var(--navy)"}}>Reportes</div>
+              <div style={s.muted}>{reporte?`${reporte.desde} a ${reporte.hasta}`:"Resumen de reservas por periodo"}</div>
+            </div>
+            <div style={{display:"flex",gap:6,flexWrap:"wrap"}}>
+              <button onClick={fetchReporte} disabled={reporteLoading} style={{fontSize:12,background:"#fff",color:"var(--navy)",border:"1px solid var(--border)"}}>{reporteLoading?"Cargando...":"Actualizar"}</button>
+              <button onClick={exportReporteCSV} disabled={!reporte||reporteLoading} style={{fontSize:12,background:"var(--cyan-light)",color:"var(--navy)",border:"1px solid var(--border)"}}>Exportar CSV</button>
+            </div>
+          </div>
+          <div style={{...s.card,padding:"0.75rem",marginBottom:12}}>
+            <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(145px,1fr))",gap:8,alignItems:"end"}}>
+              <div><label style={s.label}>Periodo</label>
+                <select value={reporteFiltros.periodo} onChange={e=>setReporteFiltros(f=>({...f,periodo:e.target.value}))}>
+                  <option value="semana">Semana actual</option>
+                  <option value="mes">Mes actual</option>
+                  <option value="rango">Rango personalizado</option>
+                </select>
+              </div>
+              {reporteFiltros.periodo==="rango"&&(<>
+                <div><label style={s.label}>Desde</label><input type="date" value={reporteFiltros.desde} onChange={e=>setReporteFiltros(f=>({...f,desde:e.target.value}))}/></div>
+                <div><label style={s.label}>Hasta</label><input type="date" value={reporteFiltros.hasta} onChange={e=>setReporteFiltros(f=>({...f,hasta:e.target.value}))}/></div>
+              </>)}
+              <div><label style={s.label}>Profesional</label>
+                <select value={reporteFiltros.profesional} onChange={e=>setReporteFiltros(f=>({...f,profesional:e.target.value}))}>
+                  <option value="todos">Todos</option>
+                  {profesionales.map(u=><option key={u.id} value={u.id}>{u.nombre}</option>)}
+                </select>
+              </div>
+            </div>
+          </div>
+          {reporteError&&<div style={{...s.card,borderLeft:"3px solid var(--danger)",marginBottom:10,color:"var(--danger)",fontSize:13}}>{reporteError}</div>}
+          {!reporteError&&reporteLoading&&!reporte&&<p style={s.muted}>Cargando reporte...</p>}
+          {reporte&&(<>
+            <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(140px,1fr))",gap:8,marginBottom:12}}>
+              <div style={{...s.card,padding:"0.75rem"}}><div style={s.muted}>Confirmadas</div><div style={{fontSize:24,fontWeight:700,color:"var(--success)"}}>{reporte.resumen.confirmadas}</div></div>
+              <div style={{...s.card,padding:"0.75rem"}}><div style={s.muted}>Canceladas</div><div style={{fontSize:24,fontWeight:700,color:"var(--danger)"}}>{reporte.resumen.canceladas}</div></div>
+              <div style={{...s.card,padding:"0.75rem"}}><div style={s.muted}>Total</div><div style={{fontSize:24,fontWeight:700,color:"var(--navy)"}}>{reporte.resumen.total}</div></div>
+            </div>
+            <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(260px,1fr))",gap:12}}>
+              <div>
+                <div style={{fontWeight:600,fontSize:13,color:"var(--navy)",marginBottom:6}}>Por profesional</div>
+                {(reporte.porProfesional||[]).length===0&&<p style={s.muted}>Sin reservas en este periodo.</p>}
+                {(reporte.porProfesional||[]).map(x=>(
+                  <div key={x.id} style={{...s.card,padding:"0.7rem",marginBottom:7}}>
+                    <div style={{display:"flex",justifyContent:"space-between",gap:8,fontSize:13,fontWeight:600,color:"var(--navy)"}}><span>{x.nombre}</span><span>{x.total}</span></div>
+                    <div style={s.muted}>Confirmadas: {x.confirmadas} · Canceladas: {x.canceladas}</div>
+                  </div>
+                ))}
+              </div>
+              <div>
+                <div style={{fontWeight:600,fontSize:13,color:"var(--navy)",marginBottom:6}}>Por consultorio</div>
+                {(reporte.porConsultorio||[]).length===0&&<p style={s.muted}>Sin reservas en este periodo.</p>}
+                {(reporte.porConsultorio||[]).map(x=>(
+                  <div key={x.consultorio} style={{...s.card,padding:"0.7rem",marginBottom:7}}>
+                    <div style={{display:"flex",justifyContent:"space-between",gap:8,fontSize:13,fontWeight:600,color:"var(--navy)"}}><span>{x.consultorio}</span><span>{x.total}</span></div>
+                    <div style={s.muted}>Confirmadas: {x.confirmadas} · Canceladas: {x.canceladas}</div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          </>)}
         </div>
       )}
 
