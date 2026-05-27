@@ -42,6 +42,7 @@ function handle(e) {
       case "eliminarBloqueo":        return resp(eliminarBloqueo(merged, token));
       case "getBloqueos":            return resp(getBloqueos());
       case "getAuditoria":           return resp(getAuditoria(merged, token));
+      case "crearRespaldoManual":    return resp(crearRespaldoManual(token));
       case "generarPreestablecidas": return resp(generarPreestablecidas(merged, token));
       case "diagnosticarDatos":      return resp(diagnosticarDatos(token));
       case "migrarFranjas":          return resp(migrarFranjas(token));
@@ -100,6 +101,10 @@ function puedeGestionarBloqueos(user) {
 
 function puedeVerAuditoria(user) {
   return user.rol === "admin" || user.rol === "socio" || user.rol === "asistente";
+}
+
+function puedeCrearRespaldo(user) {
+  return user.rol === "admin" || user.rol === "socio";
 }
 
 function getUserNameById(userId) {
@@ -339,6 +344,46 @@ function resumenReservaAudit(r) {
 function resumenBloqueoAudit(b) {
   if (!b) return "";
   return `${b.consultorio} · ${b.fecha} · ${b.hora}${b.nota ? " · " + b.nota : ""}`;
+}
+
+// ── Respaldos manuales ───────────────────────────────────────
+function crearRespaldoManual(token) {
+  return withWriteLock(function() {
+    const user = getUserFromToken(token);
+    if (!puedeCrearRespaldo(user)) return { ok: false, error: "Solo admin o socio" };
+
+    const ss = SpreadsheetApp.getActiveSpreadsheet();
+    const timestamp = Utilities.formatDate(new Date(), Session.getScriptTimeZone(), "yyyyMMdd_HHmm");
+    const hojas = [SHEET_RESERVAS, SHEET_BLOQUEOS, SHEET_USUARIOS, SHEET_AUDITORIA];
+    const creadas = [];
+    const omitidas = [];
+
+    hojas.forEach(nombre => {
+      const source = ss.getSheetByName(nombre);
+      if (!source) {
+        omitidas.push(nombre);
+        return;
+      }
+      const backupName = uniqueSheetName(ss, `Backup_${nombre}_${timestamp}`);
+      source.copyTo(ss).setName(backupName);
+      creadas.push(backupName);
+    });
+
+    const resumen = `creó respaldo manual de ${creadas.length} hojas: ${creadas.join(", ")}`;
+    registrarAuditoria(user, "respaldo", "sistema", timestamp, resumen, null, { hojas: creadas, omitidas });
+    return { ok: true, timestamp, hojas: creadas, omitidas };
+  });
+}
+
+function uniqueSheetName(ss, baseName) {
+  let name = baseName.slice(0, 99);
+  let n = 2;
+  while (ss.getSheetByName(name)) {
+    const suffix = `_${n}`;
+    name = baseName.slice(0, 99 - suffix.length) + suffix;
+    n++;
+  }
+  return name;
 }
 
 function crearReserva(body, token) {

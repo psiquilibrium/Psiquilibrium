@@ -484,6 +484,20 @@ function App(){
     setLoading(false);
   };
 
+  const handleCrearRespaldo=async()=>{
+    if(!confirm("Se crearán copias de las hojas principales. No se modifican los datos actuales. ¿Crear respaldo ahora?"))return;
+    setLoading(true);
+    setError(null);
+    try{
+      const d=await api({action:"crearRespaldoManual",token});
+      if(d.ok){
+        showToast(`Respaldo creado: ${(d.hojas||[]).length} hojas`);
+        if(view==="actividad")fetchAuditoria();
+      }else setError(d.error||"No se pudo crear el respaldo.");
+    }catch{setError("Error al crear respaldo.");}
+    setLoading(false);
+  };
+
   const openCell=(cons,fecha,fi)=>{
     if(clipboard){handlePaste(cons,fecha,fi);return;}
     const bloqueo=getBloqueoAt(cons,fecha,fi);
@@ -733,8 +747,9 @@ function App(){
     else start.setDate(now.getDate()-Number(actividadFiltros.periodo||7));
     return ts>=start;
   });
-  const accionTexto={crear:"Creada",editar:"Editada",mover:"Movida",cancelar:"Cancelada",reconfirmar:"Reconfirmada",eliminar:"Eliminada"};
-  const accionColor={crear:"var(--success)",editar:"var(--navy)",mover:"#9B3FA0",cancelar:"var(--danger)",reconfirmar:"var(--success)",eliminar:"var(--muted)"};
+  const accionTexto={crear:"Creada",editar:"Editada",mover:"Movida",cancelar:"Cancelada",reconfirmar:"Reconfirmada",eliminar:"Eliminada",respaldo:"Respaldo"};
+  const accionColor={crear:"var(--success)",editar:"var(--navy)",mover:"#9B3FA0",cancelar:"var(--danger)",reconfirmar:"var(--success)",eliminar:"var(--muted)",respaldo:"var(--blocked-border)"};
+  const tipoTexto={reserva:"Reserva",bloqueo:"Bloqueo",sistema:"Sistema"};
   const renderEjemplos=items=>(items||[]).slice(0,3).map((x,i)=>{
     const filas=x.items?x.items.map(it=>it.fila).join(", "):x.fila;
     const detalle=x.items?`${x.tipo} (${x.cantidad})`:x.problemas.join(", ");
@@ -926,9 +941,10 @@ function App(){
               <div style={{fontWeight:600,fontSize:14,color:"var(--navy)"}}>Todas las reservas ({reservasFiltradas.length} de {todasReservas.length})</div>
               <div style={s.muted}>Confirmadas: {conteoFiltrado.confirmadas} · Canceladas: {conteoFiltrado.canceladas}</div>
             </div>
-            {isAdmin&&<div style={{display:"flex",gap:6,flexWrap:"wrap"}}>
-              <button onClick={handleDiagnostico} disabled={loading} style={{fontSize:12,background:"#fff",color:"var(--navy)",border:"1px solid var(--border)"}}>Diagnosticar datos</button>
-              <button onClick={async()=>{setLoading(true);try{const d=await api({action:"generarPreestablecidas",token});if(d.ok){await fetchAll(token);showToast(`${d.creadas} reservas fijas generadas`);}else setError(d.error);}catch{setError("Error.");}setLoading(false);}} style={{fontSize:12,background:"var(--cyan-light)",color:"var(--navy)"}}>⚡ Generar reservas fijas</button>
+            {isSocio&&<div style={{display:"flex",gap:6,flexWrap:"wrap"}}>
+              <button onClick={handleCrearRespaldo} disabled={loading} style={{fontSize:12,background:"#fff",color:"var(--navy)",border:"1px solid var(--border)"}}>Crear respaldo</button>
+              {isAdmin&&<button onClick={handleDiagnostico} disabled={loading} style={{fontSize:12,background:"#fff",color:"var(--navy)",border:"1px solid var(--border)"}}>Diagnosticar datos</button>}
+              {isAdmin&&<button onClick={async()=>{setLoading(true);try{const d=await api({action:"generarPreestablecidas",token});if(d.ok){await fetchAll(token);showToast(`${d.creadas} reservas fijas generadas`);}else setError(d.error);}catch{setError("Error.");}setLoading(false);}} style={{fontSize:12,background:"var(--cyan-light)",color:"var(--navy)"}}>⚡ Generar reservas fijas</button>}
             </div>}
           </div>
           <div style={{...s.card,padding:"0.75rem",marginBottom:12}}>
@@ -1043,6 +1059,7 @@ function App(){
                   <option value="cancelar">Canceladas</option>
                   <option value="reconfirmar">Reconfirmadas</option>
                   <option value="eliminar">Eliminadas</option>
+                  <option value="respaldo">Respaldos</option>
                 </select>
               </div>
               <div><label style={s.label}>Periodo</label>
@@ -1067,7 +1084,7 @@ function App(){
                 </span>
               </div>
               <div style={{...s.muted,lineHeight:1.45}}>
-                {ev.tipo==="bloqueo"?"Bloqueo":"Reserva"} · {ev.timestamp}
+                {tipoTexto[ev.tipo]||"Actividad"} · {ev.timestamp}
               </div>
             </div>
           ))}
