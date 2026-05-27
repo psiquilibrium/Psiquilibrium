@@ -694,7 +694,10 @@ function App(){
     </div>
   );
 
-  const misReservas=reservas.filter(r=>r.userId===currentUser?.id).sort((a,b)=>a.fecha.localeCompare(b.fecha)||a.franja-b.franja);
+  const currentWeekStart=dateKey(getWeekDates(new Date())[0]);
+  const misReservas=reservas
+    .filter(r=>r.userId===currentUser?.id&&r.estado!=="cancelada"&&r.fecha>=currentWeekStart)
+    .sort((a,b)=>a.fecha.localeCompare(b.fecha)||a.franja-b.franja);
   const todasReservas=[...reservas].sort((a,b)=>a.fecha.localeCompare(b.fecha)||a.franja-b.franja);
   const profesionales=allUsers.filter(u=>u.rol==="profesional");
   const reservasFiltradas=todasReservas.filter(r=>{
@@ -889,7 +892,7 @@ function App(){
       {view==="mis reservas"&&(
         <div>
           <div style={{fontWeight:600,marginBottom:12,fontSize:14,color:"var(--navy)"}}>Mis reservas</div>
-          {misReservas.length===0&&<p style={s.muted}>No tienes reservas registradas.</p>}
+          {misReservas.length===0&&<p style={s.muted}>No tienes reservas vigentes o próximas.</p>}
           {misReservas.map(r=>{
             const cancelled=r.estado==="cancelada";
             const syncing=isSyncing(r.id);
