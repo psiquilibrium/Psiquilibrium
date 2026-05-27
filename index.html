@@ -46,6 +46,8 @@ const DIAS_FULL=["Lunes","Martes","Miércoles","Jueves","Viernes","Sábado"];
 const USER_COLORS=["#1B3A6B","#2a7ab5","#0f6e56","#9B3FA0","#b07800","#c05000","#1a6b5a","#8B2252","#3a6b1B","#005a8b","#6b3a1B","#1B5a6b","#5a1B6b","#6b5a1B","#2a5298","#4a7820"];
 const FRANJAS=Array.from({length:20},(_,i)=>{const h=Math.floor(8+i/2),m=i%2===0?"00":"30";return `${String(h).padStart(2,"0")}:${m}`;});
 const SESSION_KEY="psiq_v6";
+const TODAS_FILTROS_KEY="psiq_todas_filtros_v1";
+const DEFAULT_TODAS_FILTROS={profesional:"todos",consultorio:"todos",estado:"todos",texto:"",alcance:"semana",desde:"",hasta:""};
 
 function getWeekDates(base){
   const d=new Date(base),diff=d.getDay()===0?-6:1-d.getDay(),mon=new Date(d);
@@ -86,7 +88,10 @@ function App(){
   const [reporteError,setReporteError]=useState(null);
   const [form,setForm]=useState({nota:"",franjaInicio:"0",franjaFin:"2",profesionalId:""});
   const [bForm,setBForm]=useState({nota:"",franjaInicio:"0",franjaFin:"2",repeticion:"ninguna",consultorio:"0"});
-  const [todasFiltros,setTodasFiltros]=useState({profesional:"todos",consultorio:"todos",estado:"todos",texto:"",alcance:"semana",desde:"",hasta:""});
+  const [todasFiltros,setTodasFiltros]=useState(()=>{
+    try{return {...DEFAULT_TODAS_FILTROS,...JSON.parse(sessionStorage.getItem(TODAS_FILTROS_KEY)||"{}")};}
+    catch{return DEFAULT_TODAS_FILTROS;}
+  });
   const [actividadFiltros,setActividadFiltros]=useState({tipo:"todos",accion:"todas",periodo:"7"});
   const [reporteFiltros,setReporteFiltros]=useState({periodo:"semana",desde:"",hasta:"",profesional:"todos"});
   const [conflict,setConflict]=useState(false);
@@ -173,6 +178,10 @@ function App(){
     const saved=sessionStorage.getItem(SESSION_KEY);
     if(saved){try{const{user,tok,users}=JSON.parse(saved);setCurrentUser(user);setToken(tok);setAllUsers(users||[]);setScreen("app");}catch{}}
   },[]);
+
+  useEffect(()=>{
+    try{sessionStorage.setItem(TODAS_FILTROS_KEY,JSON.stringify(todasFiltros));}catch{}
+  },[todasFiltros]);
 
   const fetchAll=useCallback(async(tkn)=>{
     const activeToken=tkn||token;
@@ -799,6 +808,13 @@ function App(){
     else acc.confirmadas++;
     return acc;
   },{confirmadas:0,canceladas:0});
+  const todasEmptyText=todasReservas.length===0
+    ?"No hay reservas cargadas todavía. Actualiza la vista o revisa el periodo."
+    :todasFiltros.alcance==="semana"
+      ?"No hay reservas en la semana visible con esos filtros. Cambia de semana o ajusta los filtros."
+      :todasFiltros.alcance==="rango"
+        ?"No hay reservas en ese rango con esos filtros."
+        :"No hay reservas que coincidan con esos filtros.";
   const eventosActividad=auditoria.filter(ev=>{
     if(actividadFiltros.tipo!=="todos"&&ev.tipo!==actividadFiltros.tipo)return false;
     if(actividadFiltros.accion!=="todas"&&ev.accion!==actividadFiltros.accion)return false;
@@ -1043,7 +1059,7 @@ function App(){
                 <div><label style={s.label}>Hasta</label><input type="date" value={todasFiltros.hasta||weekEnd} onChange={e=>setTodasFiltros(f=>({...f,hasta:e.target.value}))}/></div>
               </>)}
               <div><label style={s.label}>Nota</label><input value={todasFiltros.texto} onChange={e=>setTodasFiltros(f=>({...f,texto:e.target.value}))} placeholder="Buscar texto"/></div>
-              <button onClick={()=>setTodasFiltros({profesional:"todos",consultorio:"todos",estado:"todos",texto:"",alcance:"semana",desde:"",hasta:""})} style={{fontSize:12,color:"var(--muted)"}}>Limpiar</button>
+              <button onClick={()=>setTodasFiltros(DEFAULT_TODAS_FILTROS)} style={{fontSize:12,color:"var(--muted)"}}>Limpiar</button>
             </div>
             {todasFiltros.alcance==="semana"&&<div style={{marginTop:10}}><NavSemana/></div>}
           </div>
@@ -1070,7 +1086,10 @@ function App(){
               </div>
             </div>
           )}
-          {reservasFiltradas.length===0&&<p style={s.muted}>No hay reservas con esos filtros.</p>}
+          {reservasFiltradas.length===0&&<div style={{...s.card,padding:"0.8rem",marginBottom:10,borderLeft:"3px solid var(--cyan)"}}>
+            <div style={{fontSize:13,color:"var(--navy)",fontWeight:600,marginBottom:3}}>Sin resultados</div>
+            <div style={s.muted}>{todasEmptyText}</div>
+          </div>}
           {reservasFiltradas.map(r=>{
             const u=allUsers.find(x=>x.id===r.userId);const color=getUserColor(r.userId);const cancelled=r.estado==="cancelada";
             const syncing=isSyncing(r.id);
