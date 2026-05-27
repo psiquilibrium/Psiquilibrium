@@ -30,7 +30,7 @@ function handle(e) {
     switch (action) {
       case "getAgenda":              return resp(getAgenda(merged));
       case "getAgendaVersion":       return resp(getAgendaVersion(merged));
-      case "getReservas":            return resp(getReservas());
+      case "getReservas":            return resp(getReservas(token));
       case "getReporteReservas":     return resp(getReporteReservas(merged, token));
       case "crearReserva":           return resp(crearReserva(merged, token));
       case "editarReserva":          return resp(editarReserva(merged, token));
@@ -165,16 +165,22 @@ function migrarFranjas(token) {
 }
 
 // ── Reservas ─────────────────────────────────────────────────
-function getReservas() {
+function getReservas(token) {
+  const user = getUserFromToken(token);
   const sheet = SpreadsheetApp.getActiveSpreadsheet().getSheetByName(SHEET_RESERVAS);
   const data = sheet.getDataRange().getValues();
   const reservas = [];
 
   for (let i = 1; i < data.length; i++) {
     const reserva = reservaFromRow(data[i]);
+    if (reserva && !puedeVerListadoCompletoReservas(user) && reserva.userId !== user.id) continue;
     if (reserva) reservas.push(reserva);
   }
   return { ok: true, reservas };
+}
+
+function puedeVerListadoCompletoReservas(user) {
+  return user.rol === "admin" || user.rol === "socio" || user.rol === "asistente";
 }
 
 function getReporteReservas(body, token) {
