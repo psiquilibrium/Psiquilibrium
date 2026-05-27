@@ -90,6 +90,18 @@ function getUserFromToken(token) {
   return { id: parts[0], rol: parts[1] };
 }
 
+function esRolOperativo(user) {
+  return user.rol === "admin" || user.rol === "asistente";
+}
+
+function puedeGestionarBloqueos(user) {
+  return user.rol === "admin" || user.rol === "asistente";
+}
+
+function puedeVerAuditoria(user) {
+  return user.rol === "admin" || user.rol === "socio" || user.rol === "asistente";
+}
+
 function getUserNameById(userId) {
   const sheet = SpreadsheetApp.getActiveSpreadsheet().getSheetByName(SHEET_USUARIOS);
   if (!sheet) return String(userId || "");
@@ -252,7 +264,7 @@ function registrarAuditoria(user, accion, tipo, elementoId, resumen, antes, desp
 
 function getAuditoria(body, token) {
   const user = getUserFromToken(token);
-  if (user.rol !== "admin" && user.rol !== "socio") return { ok: false, error: "Sin permiso" };
+  if (!puedeVerAuditoria(user)) return { ok: false, error: "Sin permiso" };
   const ss = SpreadsheetApp.getActiveSpreadsheet();
   const sheet = ensureAuditoriaSheet(ss);
 
@@ -333,7 +345,8 @@ function crearReserva(body, token) {
   return withWriteLock(function() {
     const user = getUserFromToken(token);
     const { consultorio, fecha, franja, duracion, nota } = body;
-    const userId = (user.rol === "admin" && body.targetUserId) ? body.targetUserId : user.id;
+    if (user.rol === "asistente" && !body.targetUserId) return { ok: false, error: "Selecciona profesional" };
+    const userId = (esRolOperativo(user) && body.targetUserId) ? body.targetUserId : user.id;
 
     if (estaBloquado(consultorio, fecha, franja, duracion)) return { ok: false, error: "Franja bloqueada" };
     if (hayConflicto(consultorio, fecha, franja, duracion, null)) return { ok: false, error: "Conflicto de horario" };
@@ -358,7 +371,7 @@ function editarReserva(body, token) {
 
     for (let i = 1; i < data.length; i++) {
       if (String(data[i][0]) !== String(body.id)) continue;
-      if (user.rol !== "admin" && user.id !== String(data[i][2])) return { ok: false, error: "Sin permiso" };
+      if (!esRolOperativo(user) && user.id !== String(data[i][2])) return { ok: false, error: "Sin permiso" };
       if (hayConflicto(data[i][1], data[i][3], data[i][4], body.duracion, body.id)) return { ok: false, error: "Conflicto de horario" };
       const antes = reservaAuditFromRow(data[i]);
       sheet.getRange(i + 1, 6).setValue(body.duracion);
@@ -380,8 +393,10 @@ function cambiarEstado(body, token) {
     for (let i = 1; i < data.length; i++) {
       if (String(data[i][0]) !== String(body.id)) continue;
       const propietario = String(data[i][2]);
-      // Admin puede cambiar cualquier estado. El dueño solo puede cancelar la suya.
-      if (user.rol !== "admin") {
+      // Admin puede cambiar cualquier estado. Asistente puede cancelar cualquiera. El dueño solo puede cancelar la suya.
+      if (user.rol === "asistente") {
+        if (body.estado !== "cancelada") return { ok: false, error: "Solo admin puede reconfirmar reservas" };
+      } else if (user.rol !== "admin") {
         if (user.id !== propietario) return { ok: false, error: "Sin permiso" };
         if (body.estado !== "cancelada") return { ok: false, error: "Solo puedes cancelar tus propias reservas" };
       }
@@ -405,7 +420,7 @@ function moverReserva(body, token) {
 
     for (let i = 1; i < data.length; i++) {
       if (String(data[i][0]) !== String(body.id)) continue;
-      if (user.rol !== "admin" && user.id !== String(data[i][2])) return { ok: false, error: "Sin permiso" };
+      if (!esRolOperativo(user) && user.id !== String(data[i][2])) return { ok: false, error: "Sin permiso" };
       const dur = Number(data[i][5]);
       if (estaBloquado(body.consultorio, body.fecha, body.franja, dur)) return { ok: false, error: "Franja bloqueada" };
       if (hayConflicto(body.consultorio, body.fecha, body.franja, dur, body.id)) return { ok: false, error: "Conflicto de horario" };
@@ -432,6 +447,7 @@ function copiarReserva(body, token) {
     for (let i = 1; i < data.length; i++) {
       if (String(data[i][0]) !== String(body.id)) continue;
       const [, , userId, , , duracion, nota, , tipo] = data[i];
+      if (!esRolOperativo(user) && user.id !== String(userId)) return { ok: false, error: "Sin permiso" };
       const targetUserId = String(userId);
       if (estaBloquado(body.consultorio, body.fecha, body.franja, duracion)) return { ok: false, error: "Franja bloqueada" };
       if (hayConflicto(body.consultorio, body.fecha, body.franja, duracion, null)) return { ok: false, error: "Conflicto de horario" };
@@ -507,7 +523,7 @@ function bloqueoFromRow(row) {
 function crearBloqueo(body, token) {
   return withWriteLock(function() {
     const user = getUserFromToken(token);
-    if (user.rol !== "admin") return { ok: false, error: "Solo admin" };
+    if (!puedeGestionarBloqueos(user)) return { ok: false, error: "Solo admin o asistente" };
 
     const ss = SpreadsheetApp.getActiveSpreadsheet();
     const sheet = ensureBloqueosSheet(ss);
@@ -526,7 +542,7 @@ function crearBloqueo(body, token) {
 function eliminarBloqueo(body, token) {
   return withWriteLock(function() {
     const user = getUserFromToken(token);
-    if (user.rol !== "admin") return { ok: false, error: "Solo admin" };
+    if (!puedeGestionarBloqueos(user)) return { ok: false, error: "Solo admin o asistente" };
     const sheet = SpreadsheetApp.getActiveSpreadsheet().getSheetByName(SHEET_BLOQUEOS);
     if (!sheet) return { ok: false, error: "No existe hoja de bloqueos" };
     const data = sheet.getDataRange().getValues();
@@ -547,7 +563,7 @@ function eliminarBloqueo(body, token) {
 function moverBloqueo(body, token) {
   return withWriteLock(function() {
     const user = getUserFromToken(token);
-    if (user.rol !== "admin") return { ok: false, error: "Solo admin" };
+    if (!puedeGestionarBloqueos(user)) return { ok: false, error: "Solo admin o asistente" };
     const sheet = SpreadsheetApp.getActiveSpreadsheet().getSheetByName(SHEET_BLOQUEOS);
     if (!sheet) return { ok: false, error: "No existe hoja de bloqueos" };
     const data = sheet.getDataRange().getValues();

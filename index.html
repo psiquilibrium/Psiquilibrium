@@ -111,7 +111,12 @@ function App(){
   const weekStart=dateKey(weekDates[0]);
   const weekEnd=dateKey(weekDates[5]);
   const isAdmin=currentUser?.rol==="admin";
+  const isAssistant=currentUser?.rol==="asistente";
   const isSocio=currentUser?.rol==="socio"||isAdmin;
+  const canOperateReservations=isAdmin||isAssistant;
+  const canCreateForOthers=isAdmin||isAssistant;
+  const canManageBlocks=isAdmin||isAssistant;
+  const canViewActivity=isSocio||isAssistant;
 
   const showToast=(msg,type="success")=>{setToast({msg,type});setTimeout(()=>setToast(null),3000);};
   const userMeta=useMemo(()=>{
@@ -292,7 +297,7 @@ function App(){
     if(hasConflictLocal(modal.consultorio,modal.fecha,fi,dur)){setConflict(true);return;}
     formActionInFlightRef.current=true;
     setLoading(true);
-    const targetUserId=(isAdmin&&form.profesionalId)?form.profesionalId:currentUser.id;
+    const targetUserId=(canCreateForOthers&&form.profesionalId)?form.profesionalId:currentUser.id;
     const tempId="temp_"+Date.now();
     const nueva={id:tempId,consultorio:modal.consultorio,userId:targetUserId,fecha:modal.fecha,franja:fi,duracion:dur,nota:form.nota,tipo:"normal",estado:"confirmada"};
     markLocalChange();
@@ -482,16 +487,16 @@ function App(){
   const openCell=(cons,fecha,fi)=>{
     if(clipboard){handlePaste(cons,fecha,fi);return;}
     const bloqueo=getBloqueoAt(cons,fecha,fi);
-    if(bloqueo){if(isAdmin)setBloqueoModal({mode:"view",bloqueo});return;}
+    if(bloqueo){if(canManageBlocks)setBloqueoModal({mode:"view",bloqueo});return;}
     const r=getReserva(cons,fecha,fi);
     if(r){
-      const canEdit=isAdmin||currentUser.id===r.userId;
+      const canEdit=canOperateReservations||currentUser.id===r.userId;
       setModal({mode:"view",reserva:r,canEdit,consultorio:cons,fecha,franja:fi});
       setForm({nota:r.nota,franjaInicio:String(r.franja),franjaFin:String(r.franja+r.duracion/30),profesionalId:""});
       setConflict(false);
     } else {
       if(isBlocked(cons,fecha,fi))return;
-      if(isSocio&&!isAdmin)return;
+      if(isSocio&&!canOperateReservations)return;
       setModal({mode:"nueva",consultorio:cons,fecha,franja:fi});
       setForm({nota:"",franjaInicio:String(fi),franjaFin:String(Math.min(fi+2,19)),profesionalId:""});
       setConflict(false);
@@ -516,7 +521,7 @@ function App(){
     </div>
   );
 
-  const BtnBloqueo=()=>isAdmin?(
+  const BtnBloqueo=()=>canManageBlocks?(
     <button onClick={()=>setBloqueoModal({mode:"nuevo",fecha:dateKey(weekDates[0])})} style={{fontSize:12,background:"var(--blocked)",color:"#8a6500",border:"1px solid var(--blocked-border)"}}>🔒 Crear bloqueo</button>
   ):null;
 
@@ -538,8 +543,8 @@ function App(){
       const color=r?getUserColor(r.userId):null;
       const syncing=isSyncing(r?.id)||isSyncing(bloqueo?.id);
       const syncLabel=getSyncLabel(r?.id)||getSyncLabel(bloqueo?.id);
-      const canDragR=r&&!isSyncing(r.id)&&(isAdmin||currentUser.id===r.userId);
-      const canDragB=bloqueo&&isBS&&!isSyncing(bloqueo.id)&&isAdmin;
+      const canDragR=r&&!isSyncing(r.id)&&(canOperateReservations||currentUser.id===r.userId);
+      const canDragB=bloqueo&&isBS&&!isSyncing(bloqueo.id)&&canManageBlocks;
       const isPaste=!!clipboard;
 
       return(
@@ -549,7 +554,7 @@ function App(){
           onDragStart={canDragR?e=>onDragStart(e,"reserva",r.id):canDragB?e=>onDragStart(e,"bloqueo",bloqueo.id):undefined}
           onDragOver={onDragOver} onDragLeave={onDragLeave} onDrop={e=>onDrop(e,ci,fecha,fi)}
           style={{padding:"5px 3px",height:46,borderBottom:"1px solid var(--border)",borderLeft:"1px solid var(--border)",
-            cursor:blocked&&!isAdmin?"not-allowed":isPaste?"copy":canDragR||canDragB?"grab":"pointer",
+            cursor:blocked&&!canManageBlocks?"not-allowed":isPaste?"copy":canDragR||canDragB?"grab":"pointer",
             background:blocked?"var(--blocked)":cancelled?"var(--cancelled)":r?color+"25":"#fff",
             borderTop:isRS&&!cancelled?`2px solid ${color}`:isBS?"2px solid var(--blocked-border)":"none",
             opacity:syncing?0.45:cancelled?0.65:1,verticalAlign:"middle",userSelect:"none",overflow:"hidden"}}>
@@ -623,8 +628,8 @@ function App(){
     const color=r?getUserColor(r.userId):null;
     const syncing=isSyncing(r?.id)||isSyncing(bloqueo?.id);
     const syncLabel=getSyncLabel(r?.id)||getSyncLabel(bloqueo?.id);
-    const canDragR=r&&!isSyncing(r.id)&&(isAdmin||currentUser.id===r.userId);
-    const canDragB=bloqueo&&!isSyncing(bloqueo.id)&&isAdmin;
+    const canDragR=r&&!isSyncing(r.id)&&(canOperateReservations||currentUser.id===r.userId);
+    const canDragB=bloqueo&&!isSyncing(bloqueo.id)&&canManageBlocks;
     const isPaste=!!clipboard;
 
     return(
@@ -633,7 +638,7 @@ function App(){
         onDragStart={canDragR?e=>onDragStart(e,"reserva",r.id):canDragB?e=>onDragStart(e,"bloqueo",bloqueo.id):undefined}
         onDragOver={onDragOver} onDragLeave={onDragLeave} onDrop={e=>onDrop(e,cons,fecha,fi)}
         style={{padding:"1px 2px",height:compact?18:24,borderBottom:"1px solid var(--border)",borderLeft:"1px solid var(--border)",
-          cursor:blocked&&!isAdmin?"not-allowed":isPaste?"copy":canDragR||canDragB?"grab":"pointer",
+          cursor:blocked&&!canManageBlocks?"not-allowed":isPaste?"copy":canDragR||canDragB?"grab":"pointer",
           background:blocked?"var(--blocked)":cancelled?"var(--cancelled)":r?color+"18":"transparent",
           borderTop:isRS&&!cancelled?`2px solid ${color}`:isBS?"2px solid var(--blocked-border)":"none",
           opacity:syncing?0.45:cancelled?0.65:1,verticalAlign:"middle",userSelect:"none"}}>
@@ -751,7 +756,7 @@ function App(){
           <span style={{fontSize:12,background:"var(--cyan-light)",padding:"2px 8px",borderRadius:6,color:"var(--navy)"}}>{currentUser.nombre} · {currentUser.rol}</span>
         </div>
         <div style={{display:"flex",gap:6,flexWrap:"wrap"}}>
-          {["consolidada","semana","mis reservas",...(isSocio?["todas","actividad"]:[])].map(v=>(
+          {["consolidada","semana","mis reservas",...(isSocio?["todas"]:[]),...(canViewActivity?["actividad"]:[])].map(v=>(
             <button key={v} onClick={()=>setView(v)} style={{fontSize:12,background:view===v?"var(--navy)":"transparent",color:view===v?"#fff":"var(--navy)",border:`1px solid ${view===v?"var(--navy)":"var(--border)"}`}}>{v.charAt(0).toUpperCase()+v.slice(1)}</button>
           ))}
           <button onClick={()=>view==="actividad"?fetchAuditoria():fetchAll(token)} style={{fontSize:12,color:"var(--muted)"}} title="Actualizar">↺</button>
@@ -804,8 +809,8 @@ function App(){
                         const color=r?getUserColor(r.userId):null;
                         const syncing=isSyncing(r?.id)||isSyncing(bloqueo?.id);
                         const syncLabel=getSyncLabel(r?.id)||getSyncLabel(bloqueo?.id);
-                        const canDragR=r&&!isSyncing(r.id)&&(isAdmin||currentUser.id===r.userId);
-                        const canDragB=bloqueo&&isBS&&!isSyncing(bloqueo.id)&&isAdmin;
+                        const canDragR=r&&!isSyncing(r.id)&&(canOperateReservations||currentUser.id===r.userId);
+                        const canDragB=bloqueo&&isBS&&!isSyncing(bloqueo.id)&&canManageBlocks;
                         const isPaste=!!clipboard;
                         return(
                           <td key={`${di}-${ci}`}
@@ -816,7 +821,7 @@ function App(){
                             style={{padding:"3px 4px",height:42,
                               borderBottom:"1px solid var(--border)",
                               borderLeft:ci===0?"2px solid var(--border)":"1px solid var(--border)",
-                              cursor:blocked&&!isAdmin?"not-allowed":isPaste?"copy":canDragR||canDragB?"grab":"pointer",
+                              cursor:blocked&&!canManageBlocks?"not-allowed":isPaste?"copy":canDragR||canDragB?"grab":"pointer",
                               background:blocked?"var(--blocked)":cancelled?"var(--cancelled)":r?color+"25":"transparent",
                               borderTop:isRS&&!cancelled?`2px solid ${color}`:isBS?"2px solid var(--blocked-border)":"none",
                               opacity:syncing?0.45:cancelled?0.65:1,verticalAlign:"middle",userSelect:"none",overflow:"hidden"}}>
@@ -1009,7 +1014,7 @@ function App(){
       )}
 
       {/* ── ACTIVIDAD ── */}
-      {view==="actividad"&&isSocio&&(
+      {view==="actividad"&&canViewActivity&&(
         <div>
           <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:10,flexWrap:"wrap",gap:8}}>
             <div>
@@ -1076,7 +1081,7 @@ function App(){
             {modal.mode==="nueva"&&(<>
               <div style={{fontWeight:600,fontSize:15,marginBottom:4,color:"var(--navy)"}}>Nueva reserva</div>
               <div style={{...s.muted,marginBottom:16}}>{CONS[modal.consultorio]} · {DIAS_FULL[weekDates.findIndex(d=>dateKey(d)===modal.fecha)]||modal.fecha}</div>
-              {isAdmin&&(<><label style={s.label}>Profesional</label>
+              {canCreateForOthers&&(<><label style={s.label}>Profesional</label>
                 <select value={form.profesionalId} onChange={e=>setForm(f=>({...f,profesionalId:e.target.value}))} style={{marginBottom:12}}>
                   <option value="">— Seleccionar —</option>
                   {profesionales.map(u=><option key={u.id} value={u.id}>{u.nombre}</option>)}
@@ -1097,7 +1102,7 @@ function App(){
               {conflict&&<div style={{fontSize:12,color:"var(--danger)",marginBottom:8}}>Hora fin debe ser mayor que inicio, o hay conflicto.</div>}
               <div style={s.modalActions}>
                 <button onClick={()=>setModal(null)} style={{color:"var(--muted)"}}>Cancelar</button>
-                <button onClick={handleSave} disabled={loading||(isAdmin&&!form.profesionalId)} style={{background:"var(--navy)",color:"#fff",border:"none"}}>Reservar</button>
+                <button onClick={handleSave} disabled={loading||(canCreateForOthers&&!form.profesionalId)} style={{background:"var(--navy)",color:"#fff",border:"none"}}>Reservar</button>
               </div>
             </>)}
             {modal.mode==="view"&&(<>
@@ -1126,8 +1131,8 @@ function App(){
                 <input value={form.nota} onChange={e=>setForm(f=>({...f,nota:e.target.value}))} style={{marginBottom:12}}/>
                 {conflict&&<div style={{fontSize:12,color:"var(--danger)",marginBottom:8}}>Conflicto de horario.</div>}
                 <div style={s.modalActions}>
-                  {(isAdmin||currentUser.id===modal.reserva.userId)&&modal.reserva.estado!=="cancelada"&&<button onClick={()=>handleEstado(modal.reserva.id,"cancelada")} disabled={isSyncing(modal.reserva.id)} style={{fontSize:11,color:"var(--danger)",background:"var(--danger-bg)",border:"1px solid #f5c6c0"}}>✗ Cancelar</button>}
-                  <button onClick={()=>handleCopy("reserva",modal.reserva)} disabled={isSyncing(modal.reserva.id)} style={{fontSize:11}}>📋 Copiar</button>
+                  {(canOperateReservations||currentUser.id===modal.reserva.userId)&&modal.reserva.estado!=="cancelada"&&<button onClick={()=>handleEstado(modal.reserva.id,"cancelada")} disabled={isSyncing(modal.reserva.id)} style={{fontSize:11,color:"var(--danger)",background:"var(--danger-bg)",border:"1px solid #f5c6c0"}}>✗ Cancelar</button>}
+                  {(canOperateReservations||currentUser.id===modal.reserva.userId)&&<button onClick={()=>handleCopy("reserva",modal.reserva)} disabled={isSyncing(modal.reserva.id)} style={{fontSize:11}}>📋 Copiar</button>}
                   <button onClick={()=>setModal(null)} style={{color:"var(--muted)"}}>Cerrar</button>
                   <button onClick={handleUpdate} disabled={loading} style={{background:"var(--navy)",color:"#fff",border:"none"}}>Guardar</button>
                 </div>
@@ -1136,7 +1141,7 @@ function App(){
                 <div style={s.modalActions}>
                   {isAdmin&&modal.reserva.estado==="cancelada"&&<button onClick={()=>handleEstado(modal.reserva.id,"confirmada")} disabled={isSyncing(modal.reserva.id)} style={{fontSize:11,color:"var(--success)",background:"var(--success-bg)",border:"1px solid #9fe1cb"}}>✓ Reconfirmar</button>}
                   {isAdmin&&modal.reserva.estado==="cancelada"&&<button onClick={()=>handleDelete(modal.reserva.id)} disabled={isSyncing(modal.reserva.id)} style={{fontSize:11,color:"var(--muted)",background:"#f5f5f5",border:"1px solid #ddd"}}>🗑 Eliminar</button>}
-                  <button onClick={()=>handleCopy("reserva",modal.reserva)} disabled={isSyncing(modal.reserva.id)} style={{fontSize:11}}>📋 Copiar</button>
+                  {(canOperateReservations||currentUser.id===modal.reserva.userId)&&<button onClick={()=>handleCopy("reserva",modal.reserva)} disabled={isSyncing(modal.reserva.id)} style={{fontSize:11}}>📋 Copiar</button>}
                   <button onClick={()=>setModal(null)}>Cerrar</button>
                 </div>
               </>)}
