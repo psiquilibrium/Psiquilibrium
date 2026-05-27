@@ -116,7 +116,9 @@ function App(){
   const canOperateReservations=isAdmin||isAssistant;
   const canCreateForOthers=isAdmin||isAssistant;
   const canManageBlocks=isAdmin||isAssistant;
+  const canViewAllReservations=isSocio||isAssistant;
   const canViewActivity=isSocio||isAssistant;
+  const canCreateBackup=isSocio;
 
   const showToast=(msg,type="success")=>{setToast({msg,type});setTimeout(()=>setToast(null),3000);};
   const userMeta=useMemo(()=>{
@@ -771,7 +773,7 @@ function App(){
           <span style={{fontSize:12,background:"var(--cyan-light)",padding:"2px 8px",borderRadius:6,color:"var(--navy)"}}>{currentUser.nombre} · {currentUser.rol}</span>
         </div>
         <div style={{display:"flex",gap:6,flexWrap:"wrap"}}>
-          {["consolidada","semana","mis reservas",...(isSocio?["todas"]:[]),...(canViewActivity?["actividad"]:[])].map(v=>(
+          {["consolidada","semana","mis reservas",...(canViewAllReservations?["todas"]:[]),...(canViewActivity?["actividad"]:[])].map(v=>(
             <button key={v} onClick={()=>setView(v)} style={{fontSize:12,background:view===v?"var(--navy)":"transparent",color:view===v?"#fff":"var(--navy)",border:`1px solid ${view===v?"var(--navy)":"var(--border)"}`}}>{v.charAt(0).toUpperCase()+v.slice(1)}</button>
           ))}
           <button onClick={()=>view==="actividad"?fetchAuditoria():fetchAll(token)} style={{fontSize:12,color:"var(--muted)"}} title="Actualizar">↺</button>
@@ -934,15 +936,15 @@ function App(){
       )}
 
       {/* ── TODAS ── */}
-      {view==="todas"&&isSocio&&(
+      {view==="todas"&&canViewAllReservations&&(
         <div>
           <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:10,flexWrap:"wrap",gap:8}}>
             <div>
               <div style={{fontWeight:600,fontSize:14,color:"var(--navy)"}}>Todas las reservas ({reservasFiltradas.length} de {todasReservas.length})</div>
               <div style={s.muted}>Confirmadas: {conteoFiltrado.confirmadas} · Canceladas: {conteoFiltrado.canceladas}</div>
             </div>
-            {isSocio&&<div style={{display:"flex",gap:6,flexWrap:"wrap"}}>
-              <button onClick={handleCrearRespaldo} disabled={loading} style={{fontSize:12,background:"#fff",color:"var(--navy)",border:"1px solid var(--border)"}}>Crear respaldo</button>
+            {(canCreateBackup||isAdmin)&&<div style={{display:"flex",gap:6,flexWrap:"wrap"}}>
+              {canCreateBackup&&<button onClick={handleCrearRespaldo} disabled={loading} style={{fontSize:12,background:"#fff",color:"var(--navy)",border:"1px solid var(--border)"}}>Crear respaldo</button>}
               {isAdmin&&<button onClick={handleDiagnostico} disabled={loading} style={{fontSize:12,background:"#fff",color:"var(--navy)",border:"1px solid var(--border)"}}>Diagnosticar datos</button>}
               {isAdmin&&<button onClick={async()=>{setLoading(true);try{const d=await api({action:"generarPreestablecidas",token});if(d.ok){await fetchAll(token);showToast(`${d.creadas} reservas fijas generadas`);}else setError(d.error);}catch{setError("Error.");}setLoading(false);}} style={{fontSize:12,background:"var(--cyan-light)",color:"var(--navy)"}}>⚡ Generar reservas fijas</button>}
             </div>}
