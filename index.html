@@ -65,6 +65,26 @@ button:disabled{opacity:0.5;cursor:default;}
 .metric-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:8px;margin-bottom:12px;}
 .metric-card{background:var(--white);border:1px solid var(--border);border-radius:10px;padding:0.8rem 0.9rem;}
 .metric-value{font-size:24px;font-weight:800;line-height:1.1;margin-top:3px;}
+.agenda-table{background:var(--white);border:1px solid var(--border);border-radius:10px;overflow:hidden;}
+.agenda-head-today{box-shadow:inset 0 3px 0 var(--cyan);}
+.agenda-cell{position:relative;transition:background 0.12s,border-color 0.12s,box-shadow 0.12s,transform 0.12s;}
+.agenda-cell:hover{box-shadow:inset 0 0 0 2px var(--cyan);}
+.agenda-cell.available:hover{background:#f7fcfe!important;}
+.agenda-cell:active{transform:scale(0.98);}
+.agenda-cell.available{background:#fff;}
+.agenda-cell.reserved{box-shadow:inset 0 0 0 1px rgba(27,58,107,0.08);}
+.agenda-cell.cancelled{background:repeating-linear-gradient(135deg,#f4f4f4 0,#f4f4f4 6px,#ececec 6px,#ececec 12px)!important;}
+.agenda-cell.blocked{background:repeating-linear-gradient(135deg,#f7ebd2 0,#f7ebd2 6px,#f2dfb9 6px,#f2dfb9 12px)!important;}
+.agenda-cell.syncing::after{content:"";position:absolute;inset:3px;border-radius:6px;border:1px dashed var(--muted);pointer-events:none;}
+.agenda-cell.unavailable{background:#eef3f6!important;cursor:not-allowed;}
+.agenda-name{display:inline-block;max-width:100%;padding:1px 5px;border-radius:5px;background:rgba(255,255,255,0.72);line-height:1.2;color:var(--navy);font-weight:800;overflow:hidden;white-space:nowrap;text-overflow:ellipsis;}
+.agenda-name.cancelled{color:var(--cancelled-text);text-decoration:line-through;background:rgba(255,255,255,0.55);}
+.agenda-block-label{display:inline-block;max-width:100%;padding:1px 5px;border-radius:5px;background:rgba(255,255,255,0.6);color:#7a5800;font-weight:800;overflow:hidden;white-space:nowrap;text-overflow:ellipsis;}
+.agenda-sync-label{margin-top:2px;font-size:9px;line-height:11px;color:var(--muted);font-weight:700;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
+.mobile-day-title{font-weight:800;font-size:16px;color:var(--navy);text-align:center;line-height:19px;}
+.mobile-day-button{font-size:12px;padding:8px 6px;min-height:46px;border-radius:10px;font-weight:600;background:#fff;color:var(--navy);border:1px solid var(--border);}
+.mobile-day-button.selected{background:var(--navy);color:#fff;border-color:var(--navy);box-shadow:0 2px 8px rgba(27,58,107,0.2);}
+.mobile-day-button.today:not(.selected){background:var(--cyan-light);border-color:var(--cyan);}
 @media(max-width:720px){
   #root{padding:0.75rem;}
   button{min-height:42px;padding:9px 12px;}
@@ -86,6 +106,9 @@ button:disabled{opacity:0.5;cursor:default;}
   .list-card{align-items:flex-start;flex-direction:column;padding:0.85rem;}
   .list-actions{width:100%;justify-content:flex-start;}
   .list-actions button{flex:1 1 auto;}
+  .agenda-cell{min-height:48px;}
+  .agenda-name{font-size:10px;padding:2px 5px;}
+  .agenda-block-label{font-size:10px;padding:2px 5px;}
 }
 </style>
 </head>
@@ -675,7 +698,7 @@ function App(){
     const goMobileDia=delta=>setMobileDia(v=>Math.min(5,Math.max(0,v+delta)));
 
     const MobileCell=({ci,fi})=>{
-      if(isSat&&fi>=8)return <td style={{background:"#eef3f6",borderBottom:"1px solid var(--border)",borderLeft:"1px solid var(--border)"}}></td>;
+      if(isSat&&fi>=8)return <td className="agenda-cell unavailable" style={{borderBottom:"1px solid var(--border)",borderLeft:"1px solid var(--border)"}}></td>;
       const blocked=isBlocked(ci,fecha,fi);
       const bloqueo=getBloqueoAt(ci,fecha,fi);
       const isBS=bloqueo&&bloqueo.franja===fi;
@@ -688,23 +711,23 @@ function App(){
       const canDragR=r&&!isSyncing(r.id)&&(canOperateReservations||currentUser.id===r.userId);
       const canDragB=bloqueo&&isBS&&!isSyncing(bloqueo.id)&&canManageBlocks;
       const isPaste=!!clipboard;
+      const cellState=blocked?"blocked":cancelled?"cancelled":r?"reserved":"available";
 
       return(
         <td
+          className={`agenda-cell ${cellState} ${syncing?"syncing":""}`}
           onClick={()=>openCell(ci,fecha,fi)}
           draggable={!!(canDragR||canDragB)}
           onDragStart={canDragR?e=>onDragStart(e,"reserva",r.id):canDragB?e=>onDragStart(e,"bloqueo",bloqueo.id):undefined}
           onDragOver={onDragOver} onDragLeave={onDragLeave} onDrop={e=>onDrop(e,ci,fecha,fi)}
-          style={{padding:"5px 3px",height:46,borderBottom:"1px solid var(--border)",borderLeft:"1px solid var(--border)",
+          style={{padding:"5px 4px",height:50,borderBottom:"1px solid var(--border)",borderLeft:"1px solid var(--border)",
             cursor:blocked&&!canManageBlocks?"not-allowed":isPaste?"copy":canDragR||canDragB?"grab":"pointer",
             background:blocked?"var(--blocked)":cancelled?"var(--cancelled)":r?color+"25":"#fff",
-            borderTop:isRS&&!cancelled?`2px solid ${color}`:isBS?"2px solid var(--blocked-border)":"none",
-            opacity:syncing?0.45:cancelled?0.65:1,verticalAlign:"middle",userSelect:"none",overflow:"hidden"}}>
-          {isRS&&<div style={{fontSize:10,lineHeight:"12px",color:cancelled?"#999":"var(--navy)",fontWeight:700,overflow:"hidden",whiteSpace:"nowrap",textOverflow:"ellipsis",textDecoration:cancelled?"line-through":"none"}}>
-            {cancelled?"✗ ":""}{getUserName(r.userId)}
-          </div>}
-          {isBS&&!r&&<div style={{fontSize:10,lineHeight:"12px",color:"#8a6500",fontWeight:700,overflow:"hidden",whiteSpace:"nowrap",textOverflow:"ellipsis"}}>🔒 {bloqueo.nota||"Bloqueo"}</div>}
-          {syncing&&<div style={{fontSize:9,lineHeight:"11px",color:"var(--muted)",fontWeight:600,whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis"}}>{syncLabel}</div>}
+            borderTop:isRS&&!cancelled?`3px solid ${color}`:isBS?"3px solid var(--blocked-border)":"none",
+            opacity:syncing?0.7:cancelled?0.72:1,verticalAlign:"middle",userSelect:"none",overflow:"hidden"}}>
+          {isRS&&<span className={`agenda-name ${cancelled?"cancelled":""}`}>{cancelled?"✗ ":""}{getUserName(r.userId)}</span>}
+          {isBS&&!r&&<span className="agenda-block-label">🔒 {bloqueo.nota||"Bloqueo"}</span>}
+          {syncing&&<div className="agenda-sync-label">{syncLabel}</div>}
         </td>
       );
     };
@@ -713,7 +736,7 @@ function App(){
       <div>
         <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",gap:8,marginBottom:8}}>
           <button onClick={()=>goMobileDia(-1)} disabled={mobileDia===0} style={{fontSize:18,padding:"6px 12px"}}>←</button>
-          <div style={{fontWeight:700,fontSize:15,color:"var(--navy)",textAlign:"center",lineHeight:"18px"}}>
+          <div className="mobile-day-title">
             {DIAS_FULL[mobileDia]}<br/><span style={{fontSize:12,color:"var(--muted)",fontWeight:500}}>{fmt(d)}</span>
           </div>
           <button onClick={()=>goMobileDia(1)} disabled={mobileDia===5} style={{fontSize:18,padding:"6px 12px"}}>→</button>
@@ -724,8 +747,7 @@ function App(){
             const isToday=dateKey(dia)===dateKey(new Date());
             return(
               <button key={idx} onClick={()=>setMobileDia(idx)}
-                style={{fontSize:12,padding:"8px 6px",minHeight:44,background:selected?"var(--navy)":isToday?"var(--cyan-light)":"#fff",
-                  color:selected?"#fff":"var(--navy)",border:`1px solid ${selected?"var(--navy)":"var(--border)"}`,fontWeight:selected?700:500}}>
+                className={`mobile-day-button ${selected?"selected":""} ${isToday?"today":""}`}>
                 {DIAS[idx]} {fmt(dia)}
               </button>
             );
@@ -733,11 +755,11 @@ function App(){
         </div>
         <div style={{...s.card,padding:"0.75rem",marginBottom:10}}>
           <div style={{overflowX:"auto",WebkitOverflowScrolling:"touch"}}>
-            <table style={{width:"100%",minWidth:330,borderCollapse:"collapse",tableLayout:"fixed",fontSize:11}}>
+            <table className="agenda-table" style={{width:"100%",minWidth:340,borderCollapse:"collapse",tableLayout:"fixed",fontSize:11}}>
               <thead>
                 <tr>
                   <th style={{width:50,padding:"7px 2px",fontSize:10,color:"var(--muted)",background:"var(--cyan-light)",borderBottom:"2px solid var(--border)",borderRight:"1px solid var(--border)"}}>Hora</th>
-                  {CONS.map((c,ci)=><th key={ci} style={{padding:"7px 1px",fontSize:10,fontWeight:700,color:"#fff",background:CONS_COLORS[ci],borderBottom:"2px solid var(--border)",borderLeft:"1px solid var(--border)"}}>C{ci+1}</th>)}
+                  {CONS.map((c,ci)=><th key={ci} style={{padding:"8px 1px",fontSize:11,fontWeight:800,color:"#fff",background:CONS_COLORS[ci],borderBottom:"2px solid var(--border)",borderLeft:"1px solid var(--border)"}}>C{ci+1}</th>)}
                 </tr>
               </thead>
               <tbody>
@@ -760,7 +782,7 @@ function App(){
 
   // Celda genérica para vistas "todos" y "semana"
   const Celda=({cons,fecha,fi,isSat,compact=false})=>{
-    if(isSat&&fi>=8)return<td style={{background:"#eef3f6",borderBottom:"1px solid var(--border)",borderLeft:"1px solid var(--border)"}}></td>;
+    if(isSat&&fi>=8)return<td className="agenda-cell unavailable" style={{borderBottom:"1px solid var(--border)",borderLeft:"1px solid var(--border)"}}></td>;
     const blocked=isBlocked(cons,fecha,fi);
     const bloqueo=getBloqueoAt(cons,fecha,fi);
     const isBS=bloqueo&&bloqueo.franja===fi;
@@ -773,22 +795,21 @@ function App(){
     const canDragR=r&&!isSyncing(r.id)&&(canOperateReservations||currentUser.id===r.userId);
     const canDragB=bloqueo&&!isSyncing(bloqueo.id)&&canManageBlocks;
     const isPaste=!!clipboard;
+    const cellState=blocked?"blocked":cancelled?"cancelled":r?"reserved":"available";
 
     return(
-      <td onClick={()=>openCell(cons,fecha,fi)}
+      <td className={`agenda-cell ${cellState} ${syncing?"syncing":""}`} onClick={()=>openCell(cons,fecha,fi)}
         draggable={!!(canDragR||canDragB)}
         onDragStart={canDragR?e=>onDragStart(e,"reserva",r.id):canDragB?e=>onDragStart(e,"bloqueo",bloqueo.id):undefined}
         onDragOver={onDragOver} onDragLeave={onDragLeave} onDrop={e=>onDrop(e,cons,fecha,fi)}
-        style={{padding:"1px 2px",height:compact?18:24,borderBottom:"1px solid var(--border)",borderLeft:"1px solid var(--border)",
+        style={{padding:compact?"2px 3px":"3px 4px",height:compact?22:30,borderBottom:"1px solid var(--border)",borderLeft:"1px solid var(--border)",
           cursor:blocked&&!canManageBlocks?"not-allowed":isPaste?"copy":canDragR||canDragB?"grab":"pointer",
           background:blocked?"var(--blocked)":cancelled?"var(--cancelled)":r?color+"18":"transparent",
-          borderTop:isRS&&!cancelled?`2px solid ${color}`:isBS?"2px solid var(--blocked-border)":"none",
-          opacity:syncing?0.45:cancelled?0.65:1,verticalAlign:"middle",userSelect:"none"}}>
-        {isRS&&<div style={{fontSize:compact?7:9,color:cancelled?"var(--cancelled-text)":"var(--navy)",fontWeight:600,overflow:"hidden",whiteSpace:"nowrap",textOverflow:"ellipsis",textDecoration:cancelled?"line-through":"none"}}>
-          {cancelled?"✗ ":""}{getUserName(r.userId)}
-        </div>}
-        {isBS&&!r&&<div style={{fontSize:compact?7:9,color:"#8a6500",fontWeight:600,overflow:"hidden",whiteSpace:"nowrap"}}>🔒{bloqueo.nota?` ${bloqueo.nota.slice(0,8)}`:""}</div>}
-        {syncing&&!compact&&<div style={{fontSize:8,color:"var(--muted)",fontWeight:600,whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis"}}>{syncLabel}</div>}
+          borderTop:isRS&&!cancelled?`3px solid ${color}`:isBS?"3px solid var(--blocked-border)":"none",
+          opacity:syncing?0.7:cancelled?0.72:1,verticalAlign:"middle",userSelect:"none",overflow:"hidden"}}>
+        {isRS&&<span className={`agenda-name ${cancelled?"cancelled":""}`} style={{fontSize:compact?8:10}}>{cancelled?"✗ ":""}{getUserName(r.userId)}</span>}
+        {isBS&&!r&&<span className="agenda-block-label" style={{fontSize:compact?8:10}}>🔒{bloqueo.nota?` ${bloqueo.nota.slice(0,10)}`:""}</span>}
+        {syncing&&!compact&&<div className="agenda-sync-label">{syncLabel}</div>}
       </td>
     );
   };
@@ -796,11 +817,11 @@ function App(){
   const TodosConsultorios=()=>(
     <>
       <div style={{overflowX:"auto"}}>
-        <table style={{width:"100%",borderCollapse:"collapse",tableLayout:"fixed",fontSize:12,marginBottom:4}}>
+        <table className="agenda-table" style={{width:"100%",borderCollapse:"collapse",tableLayout:"fixed",fontSize:12,marginBottom:4}}>
           <thead>
             <tr>
               <th style={{width:80,background:"var(--cyan-light)",borderBottom:"2px solid var(--border)"}}></th>
-              {weekDates.map((d,i)=>{const isToday=dateKey(d)===dateKey(new Date());return<th key={i} style={{padding:"6px 2px",fontWeight:isToday?700:500,color:isToday?"#fff":"var(--navy)",textAlign:"center",borderBottom:"2px solid var(--border)",background:isToday?"var(--navy)":"var(--cyan-light)",borderLeft:"1px solid var(--border)"}}>{DIAS[i]}<br/><span style={{fontSize:10,fontWeight:400}}>{fmt(d)}</span></th>;})}
+              {weekDates.map((d,i)=>{const isToday=dateKey(d)===dateKey(new Date());return<th key={i} className={isToday?"agenda-head-today":""} style={{padding:"7px 2px",fontWeight:isToday?800:600,color:isToday?"#fff":"var(--navy)",textAlign:"center",borderBottom:"2px solid var(--border)",background:isToday?"var(--navy)":"var(--cyan-light)",borderLeft:"1px solid var(--border)"}}>{DIAS[i]}<br/><span style={{fontSize:10,fontWeight:500}}>{fmt(d)}{isToday?" · Hoy":""}</span></th>;})}
             </tr>
           </thead>
         </table>
@@ -934,13 +955,13 @@ function App(){
           </div>
           {isMobile?<MobileConsolidada/>:(<>
           <div style={{overflowX:"auto"}}>
-            <table style={{borderCollapse:"collapse",fontSize:11,width:"100%",tableLayout:"fixed"}}>
+            <table className="agenda-table" style={{borderCollapse:"collapse",fontSize:11,width:"100%",tableLayout:"fixed"}}>
               <thead>
                 <tr>
                   <th style={{width:55,background:"var(--cyan-light)",borderBottom:"2px solid var(--border)",borderRight:"1px solid var(--border)"}}></th>
                   {weekDates.map((d,di)=>{const isToday=dateKey(d)===dateKey(new Date());return(
-                    <th key={di} colSpan={4} style={{padding:"8px 4px",textAlign:"center",background:isToday?"var(--navy)":"var(--cyan-light)",color:isToday?"#fff":"var(--navy)",fontWeight:700,borderBottom:"2px solid var(--border)",borderLeft:"2px solid var(--border)",fontSize:13}}>
-                      {DIAS[di]} {fmt(d)}
+                    <th key={di} colSpan={4} className={isToday?"agenda-head-today":""} style={{padding:"9px 4px",textAlign:"center",background:isToday?"var(--navy)":"var(--cyan-light)",color:isToday?"#fff":"var(--navy)",fontWeight:800,borderBottom:"2px solid var(--border)",borderLeft:"2px solid var(--border)",fontSize:13}}>
+                      {DIAS[di]} {fmt(d)}{isToday?" · Hoy":""}
                     </th>
                   );})}
                 </tr>
@@ -958,7 +979,7 @@ function App(){
                     {weekDates.map((d,di)=>{
                       const fecha=dateKey(d);const isSat=di===5;
                       return CONS.map((c,ci)=>{
-                        if(isSat&&fi>=8)return<td key={`${di}-${ci}`} style={{background:"#eef3f6",borderBottom:"1px solid var(--border)",borderLeft:ci===0?"2px solid var(--border)":"1px solid var(--border)"}}></td>;
+                        if(isSat&&fi>=8)return<td key={`${di}-${ci}`} className="agenda-cell unavailable" style={{borderBottom:"1px solid var(--border)",borderLeft:ci===0?"2px solid var(--border)":"1px solid var(--border)"}}></td>;
                         const blocked=isBlocked(ci,fecha,fi);
                         const bloqueo=getBloqueoAt(ci,fecha,fi);
                         const isBS=bloqueo&&bloqueo.franja===fi;
@@ -971,8 +992,10 @@ function App(){
                         const canDragR=r&&!isSyncing(r.id)&&(canOperateReservations||currentUser.id===r.userId);
                         const canDragB=bloqueo&&isBS&&!isSyncing(bloqueo.id)&&canManageBlocks;
                         const isPaste=!!clipboard;
+                        const cellState=blocked?"blocked":cancelled?"cancelled":r?"reserved":"available";
                         return(
                           <td key={`${di}-${ci}`}
+                            className={`agenda-cell ${cellState} ${syncing?"syncing":""}`}
                             onClick={()=>openCell(ci,fecha,fi)}
                             draggable={!!(canDragR||canDragB)}
                             onDragStart={canDragR?e=>onDragStart(e,"reserva",r.id):canDragB?e=>onDragStart(e,"bloqueo",bloqueo.id):undefined}
@@ -982,11 +1005,11 @@ function App(){
                               borderLeft:ci===0?"2px solid var(--border)":"1px solid var(--border)",
                               cursor:blocked&&!canManageBlocks?"not-allowed":isPaste?"copy":canDragR||canDragB?"grab":"pointer",
                               background:blocked?"var(--blocked)":cancelled?"var(--cancelled)":r?color+"25":"transparent",
-                              borderTop:isRS&&!cancelled?`2px solid ${color}`:isBS?"2px solid var(--blocked-border)":"none",
-                              opacity:syncing?0.45:cancelled?0.65:1,verticalAlign:"middle",userSelect:"none",overflow:"hidden"}}>
-                {isRS&&<div style={{fontSize:10,color:cancelled?"#999":"var(--navy)",fontWeight:700,overflow:"hidden",whiteSpace:"nowrap",textOverflow:"ellipsis",textDecoration:cancelled?"line-through":"none",paddingLeft:2}}>{cancelled?"✗ ":""}{getUserName(r.userId)}</div>}
-                            {isBS&&!r&&<div style={{fontSize:10,color:"#8a6500",fontWeight:600}}>🔒</div>}
-                            {syncing&&<div style={{fontSize:9,color:"var(--muted)",fontWeight:600,whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis"}}>{syncLabel}</div>}
+                              borderTop:isRS&&!cancelled?`3px solid ${color}`:isBS?"3px solid var(--blocked-border)":"none",
+                              opacity:syncing?0.7:cancelled?0.72:1,verticalAlign:"middle",userSelect:"none",overflow:"hidden"}}>
+                            {isRS&&<span className={`agenda-name ${cancelled?"cancelled":""}`}>{cancelled?"✗ ":""}{getUserName(r.userId)}</span>}
+                            {isBS&&!r&&<span className="agenda-block-label">🔒</span>}
+                            {syncing&&<div className="agenda-sync-label">{syncLabel}</div>}
                           </td>
                         );
                       });
@@ -1029,11 +1052,11 @@ function App(){
             {CONS.map((c,i)=><button key={i} onClick={()=>setSelCons(i)} style={{fontSize:12,background:selCons===i?"var(--navy)":"transparent",color:selCons===i?"#fff":"var(--navy)",border:`1px solid ${selCons===i?"var(--navy)":"var(--border)"}`}}>{c}</button>)}
           </div>
           {selCons==="todos"?<TodosConsultorios/>:<div style={{overflowX:"auto"}}>
-            <table style={{width:"100%",borderCollapse:"collapse",tableLayout:"fixed",fontSize:12}}>
+            <table className="agenda-table" style={{width:"100%",borderCollapse:"collapse",tableLayout:"fixed",fontSize:12}}>
               <thead>
                 <tr>
                   <th style={{width:55,padding:"5px 4px",color:"var(--muted)",fontWeight:400,textAlign:"left",borderBottom:"1px solid var(--border)"}}>Hora</th>
-                  {weekDates.map((d,i)=>{const isToday=dateKey(d)===dateKey(new Date());return<th key={i} style={{padding:"5px 2px",fontWeight:isToday?700:400,color:isToday?"#fff":"var(--muted)",textAlign:"center",borderBottom:"1px solid var(--border)",background:isToday?"var(--navy)":"transparent"}}>{DIAS[i]}<br/><span style={{fontSize:10}}>{fmt(d)}</span></th>;})}
+                  {weekDates.map((d,i)=>{const isToday=dateKey(d)===dateKey(new Date());return<th key={i} className={isToday?"agenda-head-today":""} style={{padding:"6px 2px",fontWeight:isToday?800:500,color:isToday?"#fff":"var(--navy)",textAlign:"center",borderBottom:"1px solid var(--border)",background:isToday?"var(--navy)":"var(--cyan-light)"}}>{DIAS[i]}<br/><span style={{fontSize:10}}>{fmt(d)}{isToday?" · Hoy":""}</span></th>;})}
                 </tr>
               </thead>
               <tbody>
