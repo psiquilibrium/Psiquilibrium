@@ -945,6 +945,7 @@ function App(){
               <button key={v} onClick={()=>setView(v)} className={`tab-button ${view===v?"active":""}`}>{viewLabels[v]}</button>
             ))}
             <button onClick={()=>view==="actividad"?fetchAuditoria():view==="reportes"?fetchReporte():fetchAll(token)} className="icon-button" style={{fontSize:12,color:"var(--muted)"}} title="Actualizar">↺</button>
+            <button onClick={()=>window.location.reload()} className="icon-button" style={{fontSize:12,color:"var(--muted)"}} title="Recargar app">⟳ App</button>
             <button onClick={()=>{sessionStorage.removeItem(SESSION_KEY);setScreen("login");setCurrentUser(null);setToken(null);}} className="icon-button" style={{fontSize:12,color:"var(--muted)"}}>Salir</button>
           </div>
         </div>
