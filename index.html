@@ -19,7 +19,7 @@
   --bg:#f0f7fa;--white:#fff;--text:#1B3A6B;--muted:#5a7a9a;
   --border:#c5dce8;--danger:#c0392b;--danger-bg:#fdf0ee;
   --success:#0f6e56;--success-bg:#eafaf3;
-  --blocked:#fbf7ee;--blocked-border:#d3bf8a;
+  --blocked:#fbf6e8;--blocked-border:#c9ad58;
   --cancelled:#f0f0f0;--cancelled-text:#999;
 }
 *,*::before,*::after{box-sizing:border-box;margin:0;padding:0;}
@@ -80,12 +80,12 @@ button:disabled{opacity:0.5;cursor:default;}
 .agenda-cell.available{background:#fff;}
 .agenda-cell.reserved{box-shadow:inset 0 0 0 1px rgba(27,58,107,0.08);}
 .agenda-cell.cancelled{background:repeating-linear-gradient(135deg,#f4f4f4 0,#f4f4f4 6px,#ececec 6px,#ececec 12px)!important;}
-.agenda-cell.blocked{background:#fbf7ee!important;box-shadow:inset 0 0 0 1px #eadfca;}
+.agenda-cell.blocked{background:repeating-linear-gradient(135deg,rgba(201,173,88,0.12) 0,rgba(201,173,88,0.12) 7px,rgba(251,246,232,0.52) 7px,rgba(251,246,232,0.52) 15px)!important;box-shadow:inset 0 0 0 1px rgba(201,173,88,0.22);}
 .agenda-cell.syncing::after{content:"";position:absolute;inset:3px;border-radius:6px;border:1px dashed var(--muted);pointer-events:none;}
 .agenda-cell.unavailable{background:#eef3f6!important;cursor:not-allowed;}
 .agenda-name{display:inline-block;max-width:100%;padding:1px 5px;border-radius:5px;background:rgba(255,255,255,0.72);line-height:1.2;color:var(--navy);font-weight:800;overflow:hidden;white-space:nowrap;text-overflow:ellipsis;}
 .agenda-name.cancelled{color:var(--cancelled-text);text-decoration:line-through;background:rgba(255,255,255,0.55);}
-.agenda-block-label{display:inline-block;max-width:100%;padding:1px 5px;border-radius:5px;background:rgba(255,255,255,0.42);color:#7d6a3d;font-weight:700;overflow:hidden;white-space:nowrap;text-overflow:ellipsis;}
+.agenda-block-label{display:inline-block;max-width:100%;padding:1px 5px;border-radius:5px;background:rgba(255,255,255,0.58);color:#7d6a3d;font-weight:700;overflow:hidden;white-space:nowrap;text-overflow:ellipsis;opacity:0.82;}
 .agenda-sync-label{margin-top:2px;font-size:9px;line-height:11px;color:var(--muted);font-weight:700;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
 .mobile-day-title{font-weight:800;font-size:16px;color:var(--navy);text-align:center;line-height:19px;}
 .mobile-day-button{font-size:12px;padding:8px 6px;min-height:46px;border-radius:10px;font-weight:600;background:#fff;color:var(--navy);border:1px solid var(--border);}
