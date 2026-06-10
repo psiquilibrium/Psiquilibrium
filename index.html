@@ -210,6 +210,7 @@ function App(){
   const canOperateReservations=isAdmin||isAssistant;
   const canCreateForOthers=isAdmin||isAssistant;
   const canManageBlocks=isAdmin||isAssistant;
+  const canDeleteCancelledReservations=isAdmin||isAssistant;
   const canViewAllReservations=isSocio||isAssistant;
   const canViewActivity=isSocio||isAssistant;
   const canCreateBackup=isSocio;
@@ -1213,7 +1214,7 @@ function App(){
                 <div className="list-actions">
                   {canOperateReservations&&!cancelled&&<button onClick={()=>handleEstado(r.id,"cancelada")} disabled={syncing} style={{fontSize:11,color:"var(--danger)",background:"var(--danger-bg)",border:"1px solid #f5c6c0"}}>✗</button>}
                   {isAdmin&&cancelled&&<button onClick={()=>handleEstado(r.id,"confirmada")} disabled={syncing} style={{fontSize:11,color:"var(--success)",background:"var(--success-bg)",border:"1px solid #9fe1cb"}}>✓</button>}
-                  {isAdmin&&cancelled&&<button onClick={()=>handleDelete(r.id)} disabled={syncing} style={{fontSize:11,color:"var(--muted)",background:"#f5f5f5",border:"1px solid #ddd"}}>🗑</button>}
+                  {canDeleteCancelledReservations&&cancelled&&<button onClick={()=>handleDelete(r.id)} disabled={syncing} style={{fontSize:11,color:"var(--muted)",background:"#f5f5f5",border:"1px solid #ddd"}}>🗑</button>}
                 </div>
               </div>
             );
@@ -1423,7 +1424,7 @@ function App(){
                 <div style={{fontSize:13,marginBottom:12}}><span style={{color:"var(--muted)"}}>Nota: </span>{modal.reserva.nota||"—"}</div>
                 <div style={s.modalActions}>
                   {isAdmin&&modal.reserva.estado==="cancelada"&&<button onClick={()=>handleEstado(modal.reserva.id,"confirmada")} disabled={isSyncing(modal.reserva.id)} style={{fontSize:11,color:"var(--success)",background:"var(--success-bg)",border:"1px solid #9fe1cb"}}>✓ Reconfirmar</button>}
-                  {isAdmin&&modal.reserva.estado==="cancelada"&&<button onClick={()=>handleDelete(modal.reserva.id)} disabled={isSyncing(modal.reserva.id)} style={{fontSize:11,color:"var(--muted)",background:"#f5f5f5",border:"1px solid #ddd"}}>🗑 Eliminar</button>}
+                  {canDeleteCancelledReservations&&modal.reserva.estado==="cancelada"&&<button onClick={()=>handleDelete(modal.reserva.id)} disabled={isSyncing(modal.reserva.id)} style={{fontSize:11,color:"var(--muted)",background:"#f5f5f5",border:"1px solid #ddd"}}>🗑 Eliminar</button>}
                   {(canOperateReservations||currentUser.id===modal.reserva.userId)&&<button onClick={()=>handleCopy("reserva",modal.reserva)} disabled={isSyncing(modal.reserva.id)} style={{fontSize:11}}>📋 Copiar</button>}
                   <button onClick={()=>setModal(null)}>Cerrar</button>
                 </div>

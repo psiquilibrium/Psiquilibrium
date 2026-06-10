@@ -593,7 +593,10 @@ function eliminarReserva(body, token) {
 
     for (let i = 1; i < data.length; i++) {
       if (String(data[i][0]) !== String(body.id)) continue;
-      if (user.rol !== "admin" && user.id !== String(data[i][2])) return { ok: false, error: "Sin permiso" };
+      const isOwner = user.id === String(data[i][2]);
+      const estado = String(data[i][9] || "confirmada");
+      const canDelete = user.rol === "admin" || isOwner || (user.rol === "asistente" && estado === "cancelada");
+      if (!canDelete) return { ok: false, error: "Solo puedes eliminar reservas canceladas" };
       const antes = reservaAuditFromRow(data[i]);
       sheet.getRange(i + 1, 8).setValue(false);
       const despues = reservaAuditFromRow([data[i][0],data[i][1],data[i][2],data[i][3],data[i][4],data[i][5],data[i][6],false,data[i][8],data[i][9]]);
