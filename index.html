@@ -44,6 +44,17 @@ button:disabled{opacity:0.5;cursor:default;}
 .tab-button{font-size:12px;border-radius:999px;background:#fff;border-color:var(--border);color:var(--navy);font-weight:600;}
 .tab-button.active{background:var(--navy);border-color:var(--navy);color:#fff;box-shadow:0 2px 6px rgba(27,58,107,0.18);}
 .icon-button{min-width:36px;padding:7px 10px;border-radius:999px;background:#fff;}
+.quick-search{position:relative;flex:1 1 260px;max-width:360px;min-width:220px;}
+.quick-search input{height:38px;padding:7px 38px 7px 12px;border-radius:999px;background:#fff;font-size:13px;}
+.quick-search-clear{position:absolute;right:4px;top:3px;min-width:32px;height:32px;padding:0;border:0;border-radius:50%;background:transparent;color:var(--muted);}
+.quick-search-results{position:absolute;top:44px;left:0;right:0;z-index:50;background:#fff;border:1px solid var(--border);border-radius:10px;box-shadow:0 12px 30px rgba(27,58,107,0.18);max-height:380px;overflow-y:auto;padding:5px;}
+.quick-search-item{width:100%;display:flex;justify-content:space-between;align-items:flex-start;gap:10px;text-align:left;padding:9px 10px;border:0;border-radius:7px;background:#fff;}
+.quick-search-item:hover{background:var(--cyan-light);}
+.quick-search-item.cancelled{background:#fafafa;opacity:0.72;}
+.quick-search-main{min-width:0;flex:1;}
+.quick-search-title{font-size:12px;font-weight:700;color:var(--navy);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+.quick-search-meta{font-size:11px;color:var(--muted);line-height:1.4;margin-top:2px;}
+.quick-search-empty{padding:10px;font-size:12px;color:var(--muted);}
 .notice{font-size:13px;margin-bottom:10px;padding:10px 12px;border-radius:10px;border:1px solid var(--border);display:flex;justify-content:space-between;gap:10px;align-items:center;line-height:1.35;}
 .notice-danger{background:var(--danger-bg);border-color:#f5c6c0;color:var(--danger);}
 .notice-info{background:var(--cyan-light);border-color:var(--cyan);color:var(--navy);}
@@ -100,6 +111,10 @@ button:disabled{opacity:0.5;cursor:default;}
   .brand-group{width:100%;min-width:0;justify-content:space-between;align-items:flex-start;}
   .brand-title{font-size:16px;}
   .user-pill{max-width:100%;font-size:11px;}
+  .quick-search{width:100%;max-width:none;min-width:0;}
+  .quick-search input{height:44px;font-size:16px;}
+  .quick-search-clear{top:6px;}
+  .quick-search-results{top:49px;max-height:min(55vh,380px);}
   .tabs{width:100%;flex-wrap:nowrap;overflow-x:auto;justify-content:flex-start;padding-bottom:4px;-webkit-overflow-scrolling:touch;}
   .tab-button{flex:0 0 auto;}
   .notice{align-items:flex-start;}
@@ -142,6 +157,7 @@ function getWeekDates(base){
 }
 function fmt(d){return `${String(d.getDate()).padStart(2,"0")}/${String(d.getMonth()+1).padStart(2,"0")}`;}
 function dateKey(d){return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,"0")}-${String(d.getDate()).padStart(2,"0")}`;}
+function searchText(value){return String(value||"").normalize("NFD").replace(/[\u0300-\u036f]/g,"").toLowerCase().trim();}
 async function api(params){
   const u=new URL(SCRIPT_URL);
   Object.entries(params).forEach(([k,v])=>u.searchParams.set(k,String(v)));
@@ -179,6 +195,8 @@ function App(){
   });
   const [actividadFiltros,setActividadFiltros]=useState({tipo:"todos",accion:"todas",periodo:"7"});
   const [reporteFiltros,setReporteFiltros]=useState({periodo:"semana",desde:"",hasta:"",profesional:"todos"});
+  const [quickSearch,setQuickSearch]=useState("");
+  const [searchOpen,setSearchOpen]=useState(false);
   const [conflict,setConflict]=useState(false);
   const [loginForm,setLoginForm]=useState({userId:"",password:""});
   const [dragItem,setDragItem]=useState(null); // {type:"reserva"|"bloqueo", id}
@@ -194,11 +212,18 @@ function App(){
   const [syncingById,setSyncingById]=useState({});
   const pasteInFlightRef=useRef(false);
   const formActionInFlightRef=useRef(false);
+  const searchRef=useRef(null);
 
   useEffect(()=>{
     const onResize=()=>setIsMobile(window.innerWidth<=720);
     window.addEventListener("resize",onResize);
     return()=>window.removeEventListener("resize",onResize);
+  },[]);
+
+  useEffect(()=>{
+    const closeSearch=e=>{if(searchRef.current&&!searchRef.current.contains(e.target))setSearchOpen(false);};
+    document.addEventListener("pointerdown",closeSearch);
+    return()=>document.removeEventListener("pointerdown",closeSearch);
   },[]);
 
   const weekDates=getWeekDates(weekBase);
@@ -688,16 +713,21 @@ function App(){
     URL.revokeObjectURL(url);
   };
 
+  const openReservaDetalle=r=>{
+    if(!r)return;
+    const canEdit=canOperateReservations||currentUser.id===r.userId;
+    setModal({mode:"view",reserva:r,canEdit,consultorio:r.consultorio,fecha:r.fecha,franja:r.franja});
+    setForm({nota:r.nota,franjaInicio:String(r.franja),franjaFin:String(r.franja+r.duracion/30),profesionalId:""});
+    setConflict(false);
+  };
+
   const openCell=(cons,fecha,fi)=>{
     if(clipboard){handlePaste(cons,fecha,fi);return;}
     const bloqueo=getBloqueoAt(cons,fecha,fi);
     if(bloqueo){if(canManageBlocks)setBloqueoModal({mode:"view",bloqueo});return;}
     const r=getReserva(cons,fecha,fi);
     if(r){
-      const canEdit=canOperateReservations||currentUser.id===r.userId;
-      setModal({mode:"view",reserva:r,canEdit,consultorio:cons,fecha,franja:fi});
-      setForm({nota:r.nota,franjaInicio:String(r.franja),franjaFin:String(r.franja+r.duracion/30),profesionalId:""});
-      setConflict(false);
+      openReservaDetalle(r);
     } else {
       if(isBlocked(cons,fecha,fi))return;
       if(isSocio&&!canOperateReservations)return;
@@ -905,6 +935,30 @@ function App(){
   const misReservas=reservas
     .filter(r=>r.userId===currentUser?.id&&r.estado!=="cancelada"&&r.fecha>=currentWeekStart)
     .sort((a,b)=>a.fecha.localeCompare(b.fecha)||a.franja-b.franja);
+  const quickSearchTerms=searchText(quickSearch).split(/\s+/).filter(Boolean);
+  const quickSearchResults=quickSearchTerms.length?reservas
+    .filter(r=>!isTempId(r.id))
+    .filter(r=>canViewAllReservations||r.userId===currentUser?.id)
+    .filter(r=>{
+      const fechaLegible=String(r.fecha||"").split("-").reverse().join("/");
+      const contenido=searchText([
+        getUserName(r.userId),
+        r.nota,
+        r.fecha,
+        fechaLegible,
+        CONS[r.consultorio]||r.consultorio
+      ].join(" "));
+      return quickSearchTerms.every(term=>contenido.includes(term));
+    })
+    .sort((a,b)=>{
+      const today=dateKey(new Date());
+      const aFuture=a.fecha>=today,bFuture=b.fecha>=today;
+      if(aFuture!==bFuture)return aFuture?-1:1;
+      return aFuture
+        ?a.fecha.localeCompare(b.fecha)||a.franja-b.franja
+        :b.fecha.localeCompare(a.fecha)||b.franja-a.franja;
+    })
+    .slice(0,10):[];
   const todasReservas=[...reservas].sort((a,b)=>a.fecha.localeCompare(b.fecha)||a.franja-b.franja);
   const profesionales=allUsers.filter(u=>u.rol==="profesional");
   const reservasFiltradas=todasReservas.filter(r=>{
@@ -972,6 +1026,36 @@ function App(){
               <span style={{fontWeight:700,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{currentUser.nombre}</span>
               <span className="user-role">{currentUser.rol}</span>
             </div>
+          </div>
+          <div className="quick-search" ref={searchRef}>
+            <input
+              type="search"
+              value={quickSearch}
+              placeholder="Buscar reserva..."
+              aria-label="Buscar reservas"
+              onFocus={()=>quickSearch.trim()&&setSearchOpen(true)}
+              onChange={e=>{setQuickSearch(e.target.value);setSearchOpen(!!e.target.value.trim());}}
+              onKeyDown={e=>{if(e.key==="Escape")setSearchOpen(false);}}
+            />
+            {quickSearch&&<button className="quick-search-clear" onClick={()=>{setQuickSearch("");setSearchOpen(false);}} title="Limpiar búsqueda" aria-label="Limpiar búsqueda">✕</button>}
+            {searchOpen&&quickSearchTerms.length>0&&(
+              <div className="quick-search-results">
+                {quickSearchResults.length===0&&<div className="quick-search-empty">No hay reservas cargadas que coincidan.</div>}
+                {quickSearchResults.map(r=>{
+                  const cancelled=r.estado==="cancelada";
+                  const hora=FRANJAS[r.franja]||"Hora no disponible";
+                  return(
+                    <button key={r.id} className={`quick-search-item ${cancelled?"cancelled":""}`} onClick={()=>{setSearchOpen(false);setQuickSearch("");openReservaDetalle(r);}}>
+                      <div className="quick-search-main">
+                        <div className="quick-search-title">{getUserName(r.userId)}</div>
+                        <div className="quick-search-meta">{r.fecha} · {hora} · {CONS[r.consultorio]||r.consultorio}</div>
+                      </div>
+                      <span className={`status-chip ${cancelled?"chip-danger":"chip-success"}`}>{cancelled?"Cancelada":"Confirmada"}</span>
+                    </button>
+                  );
+                })}
+              </div>
+            )}
           </div>
           <div className="tabs">
             {["consolidada","semana","mis reservas",...(canViewAllReservations?["todas"]:[]),...(canViewReports?["reportes"]:[]),...(canViewActivity?["actividad"]:[])].map(v=>(
