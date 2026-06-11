@@ -197,6 +197,9 @@ function App(){
   const [reporteFiltros,setReporteFiltros]=useState({periodo:"semana",desde:"",hasta:"",profesional:"todos"});
   const [quickSearch,setQuickSearch]=useState("");
   const [searchOpen,setSearchOpen]=useState(false);
+  const [searchReservas,setSearchReservas]=useState([]);
+  const [searchLoading,setSearchLoading]=useState(false);
+  const [searchError,setSearchError]=useState(null);
   const [conflict,setConflict]=useState(false);
   const [loginForm,setLoginForm]=useState({userId:"",password:""});
   const [dragItem,setDragItem]=useState(null); // {type:"reserva"|"bloqueo", id}
@@ -213,6 +216,8 @@ function App(){
   const pasteInFlightRef=useRef(false);
   const formActionInFlightRef=useRef(false);
   const searchRef=useRef(null);
+  const searchLoadedRef=useRef(false);
+  const searchInFlightRef=useRef(false);
 
   useEffect(()=>{
     const onResize=()=>setIsMobile(window.innerWidth<=720);
@@ -225,6 +230,13 @@ function App(){
     document.addEventListener("pointerdown",closeSearch);
     return()=>document.removeEventListener("pointerdown",closeSearch);
   },[]);
+
+  useEffect(()=>{
+    searchLoadedRef.current=false;
+    searchInFlightRef.current=false;
+    setSearchReservas([]);
+    setSearchError(null);
+  },[token]);
 
   const weekDates=getWeekDates(weekBase);
   const weekStart=dateKey(weekDates[0]);
@@ -436,9 +448,33 @@ function App(){
     pendingMoveIdsRef.current.delete(key);
     setSyncingById(prev=>{const next={...prev};delete next[key];return next;});
   };
-  const markLocalChange=()=>{dataVersionRef.current+=1;return dataVersionRef.current;};
+  const markLocalChange=()=>{
+    dataVersionRef.current+=1;
+    searchLoadedRef.current=false;
+    setSearchReservas([]);
+    setSearchError(null);
+    return dataVersionRef.current;
+  };
   const normalizeReservas=items=>Array.from(new Map(items.map(x=>[x.id,{...x,franja:Number(x.franja),duracion:Number(x.duracion),consultorio:Number(x.consultorio)}])).values());
   const normalizeBloqueos=items=>Array.from(new Map(items.map(x=>[x.id,{...x,franja:Number(x.franja),duracion:Number(x.duracion),consultorio:x.consultorio==="todos"?"todos":Number(x.consultorio)}])).values());
+  const loadSearchReservas=async()=>{
+    if(!token||searchLoadedRef.current||searchInFlightRef.current)return;
+    searchInFlightRef.current=true;
+    setSearchLoading(true);
+    setSearchError(null);
+    try{
+      const d=await api({action:"getReservas",token});
+      if(d.ok){
+        setSearchReservas(normalizeReservas(d.reservas||[]));
+        searchLoadedRef.current=true;
+      }else setSearchError(d.error||"No se pudieron cargar las reservas.");
+    }catch{
+      setSearchError("No se pudieron cargar las reservas. Revisa tu conexión.");
+    }finally{
+      searchInFlightRef.current=false;
+      setSearchLoading(false);
+    }
+  };
   const hasConflictLocal=(cons,fecha,fi,dur,excl=null)=>{
     const s=fi*30,e=s+dur;
     return reservas.some(r=>{
@@ -720,6 +756,12 @@ function App(){
     setForm({nota:r.nota,franjaInicio:String(r.franja),franjaFin:String(r.franja+r.duracion/30),profesionalId:""});
     setConflict(false);
   };
+  const selectQuickSearchResult=r=>{
+    setSearchOpen(false);
+    setQuickSearch("");
+    setReservas(prev=>prev.some(item=>item.id===r.id)?prev:[...prev,r]);
+    openReservaDetalle(r);
+  };
 
   const openCell=(cons,fecha,fi)=>{
     if(clipboard){handlePaste(cons,fecha,fi);return;}
@@ -936,7 +978,8 @@ function App(){
     .filter(r=>r.userId===currentUser?.id&&r.estado!=="cancelada"&&r.fecha>=currentWeekStart)
     .sort((a,b)=>a.fecha.localeCompare(b.fecha)||a.franja-b.franja);
   const quickSearchTerms=searchText(quickSearch).split(/\s+/).filter(Boolean);
-  const quickSearchResults=quickSearchTerms.length?reservas
+  const quickSearchSource=searchLoadedRef.current?searchReservas:reservas;
+  const quickSearchResults=quickSearchTerms.length?quickSearchSource
     .filter(r=>!isTempId(r.id))
     .filter(r=>canViewAllReservations||r.userId===currentUser?.id)
     .filter(r=>{
@@ -1033,19 +1076,21 @@ function App(){
               value={quickSearch}
               placeholder="Buscar reserva..."
               aria-label="Buscar reservas"
-              onFocus={()=>quickSearch.trim()&&setSearchOpen(true)}
-              onChange={e=>{setQuickSearch(e.target.value);setSearchOpen(!!e.target.value.trim());}}
+              onFocus={()=>{loadSearchReservas();if(quickSearch.trim())setSearchOpen(true);}}
+              onChange={e=>{loadSearchReservas();setQuickSearch(e.target.value);setSearchOpen(!!e.target.value.trim());}}
               onKeyDown={e=>{if(e.key==="Escape")setSearchOpen(false);}}
             />
             {quickSearch&&<button className="quick-search-clear" onClick={()=>{setQuickSearch("");setSearchOpen(false);}} title="Limpiar búsqueda" aria-label="Limpiar búsqueda">✕</button>}
             {searchOpen&&quickSearchTerms.length>0&&(
               <div className="quick-search-results">
-                {quickSearchResults.length===0&&<div className="quick-search-empty">No hay reservas cargadas que coincidan.</div>}
-                {quickSearchResults.map(r=>{
+                {searchLoading&&<div className="quick-search-empty">Cargando reservas...</div>}
+                {searchError&&<div className="quick-search-empty" style={{color:"var(--danger)"}}>{searchError}</div>}
+                {!searchLoading&&!searchError&&quickSearchResults.length===0&&<div className="quick-search-empty">No hay reservas que coincidan.</div>}
+                {!searchLoading&&!searchError&&quickSearchResults.map(r=>{
                   const cancelled=r.estado==="cancelada";
                   const hora=FRANJAS[r.franja]||"Hora no disponible";
                   return(
-                    <button key={r.id} className={`quick-search-item ${cancelled?"cancelled":""}`} onClick={()=>{setSearchOpen(false);setQuickSearch("");openReservaDetalle(r);}}>
+                    <button key={r.id} className={`quick-search-item ${cancelled?"cancelled":""}`} onClick={()=>selectQuickSearchResult(r)}>
                       <div className="quick-search-main">
                         <div className="quick-search-title">{getUserName(r.userId)}</div>
                         <div className="quick-search-meta">{r.fecha} · {hora} · {CONS[r.consultorio]||r.consultorio}</div>
