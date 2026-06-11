@@ -480,6 +480,21 @@ function App(){
   const handleDelete=async(id)=>{
     if(isSyncing(id)){setError("La reserva aún se está sincronizando. Intenta de nuevo en unos segundos.");fetchAll(token);return;}
     const previous=reservas.find(r=>r.id===id);
+    if(!previous){setError("No se encontró la reserva. Actualiza la agenda e intenta nuevamente.");return;}
+    if(previous.estado!=="cancelada"){setError("Solo se pueden eliminar reservas canceladas.");return;}
+    const horaInicio=FRANJAS[previous.franja]||"Hora no disponible";
+    const horaFin=FRANJAS[previous.franja+previous.duracion/30]||"18:00";
+    const confirmar=window.confirm([
+      "¿Eliminar esta reserva cancelada?",
+      "",
+      `Profesional: ${getUserName(previous.userId)}`,
+      `Fecha: ${previous.fecha}`,
+      `Horario: ${horaInicio} – ${horaFin}`,
+      `Consultorio: ${CONS[previous.consultorio]||previous.consultorio}`,
+      "",
+      "La reserva dejará de aparecer en la agenda, pero la eliminación quedará registrada en Actividad."
+    ].join("\n"));
+    if(!confirmar)return;
     beginSync(id,"Eliminando...");
     markLocalChange();
     setReservas(prev=>prev.filter(r=>r.id!==id));
@@ -594,6 +609,23 @@ function App(){
   const handleEliminarBloqueo=async(id)=>{
     if(isSyncing(id)){setError("El bloqueo aún se está sincronizando. Intenta de nuevo en unos segundos.");fetchAll(token);return;}
     const previous=bloqueos.find(b=>b.id===id);
+    if(!previous){setError("No se encontró el bloqueo. Actualiza la agenda e intenta nuevamente.");return;}
+    const horaInicio=FRANJAS[previous.franja]||"Hora no disponible";
+    const horaFin=FRANJAS[previous.franja+previous.duracion/30]||"18:00";
+    const consultorio=previous.consultorio==="todos"?"Todos los consultorios":CONS[previous.consultorio]||previous.consultorio;
+    const repeticion=previous.repeticion==="semanal"?"Semanal":"Sin repetición";
+    const confirmar=window.confirm([
+      "¿Eliminar este bloqueo?",
+      "",
+      `Fecha: ${previous.fecha}`,
+      `Horario: ${horaInicio} – ${horaFin}`,
+      `Duración: ${previous.duracion} minutos`,
+      `Consultorio: ${consultorio}`,
+      `Repetición: ${repeticion}`,
+      "",
+      "El bloqueo dejará de aparecer en la agenda, pero la eliminación quedará registrada en Actividad."
+    ].join("\n"));
+    if(!confirmar)return;
     beginSync(id,"Eliminando...");
     markLocalChange();
     setBloqueos(prev=>prev.filter(b=>b.id!==id));
