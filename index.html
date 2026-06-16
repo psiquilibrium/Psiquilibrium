@@ -12,7 +12,7 @@
 <title>Psiquilibrium</title>
 <script src="https://unpkg.com/react@18/umd/react.production.min.js" onerror="this.onerror=null;this.src='https://cdn.jsdelivr.net/npm/react@18/umd/react.production.min.js';"></script>
 <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js" onerror="this.onerror=null;this.src='https://cdn.jsdelivr.net/npm/react-dom@18/umd/react-dom.production.min.js';"></script>
-<script src="https://unpkg.com/@babel/standalone/babel.min.js" onerror="this.onerror=null;this.src='https://cdn.jsdelivr.net/npm/@babel/standalone/babel.min.js';"></script>
+<script src="https://unpkg.com/@babel/standalone@7.25.6/babel.min.js" onerror="this.onerror=null;this.src='https://cdn.jsdelivr.net/npm/@babel/standalone@7.25.6/babel.min.js';"></script>
 <script>
 window.__psiqStartupErrors=[];
 window.addEventListener("error",function(e){
@@ -156,7 +156,7 @@ button:disabled{opacity:0.5;cursor:default;}
 </head>
 <body>
 <div id="root"><div style="padding:1rem;color:#1B3A6B;font-family:system-ui,sans-serif;">Cargando Psiquilibrium...</div></div>
-<script type="text/babel">
+<script type="text/babel" data-presets="env,react">
 const{useState,useEffect,useCallback,useMemo,useRef}=React;
 
 const SCRIPT_URL="https://script.google.com/macros/s/AKfycbwtbD8VGPkhFg0nMuRW2uvIjLnLlVXclYvqRlyqgYpz_kKNLxSX2FrYCdmwW8mQhudv/exec";
