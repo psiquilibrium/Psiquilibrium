@@ -10,9 +10,9 @@
 <link rel="manifest" href="manifest.webmanifest"/>
 <link rel="apple-touch-icon" href="icons/apple-touch-icon.png"/>
 <title>Psiquilibrium</title>
-<script src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
-<script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
-<script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+<script src="https://unpkg.com/react@18/umd/react.production.min.js" onerror="this.onerror=null;this.src='https://cdn.jsdelivr.net/npm/react@18/umd/react.production.min.js';"></script>
+<script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js" onerror="this.onerror=null;this.src='https://cdn.jsdelivr.net/npm/react-dom@18/umd/react-dom.production.min.js';"></script>
+<script src="https://unpkg.com/@babel/standalone/babel.min.js" onerror="this.onerror=null;this.src='https://cdn.jsdelivr.net/npm/@babel/standalone/babel.min.js';"></script>
 <style>
 :root{
   --navy:#1B3A6B;--cyan:#4DC8E8;--cyan-light:#e8f7fc;
@@ -134,7 +134,7 @@ button:disabled{opacity:0.5;cursor:default;}
 </style>
 </head>
 <body>
-<div id="root"></div>
+<div id="root"><div style="padding:1rem;color:#1B3A6B;font-family:system-ui,sans-serif;">Cargando Psiquilibrium...</div></div>
 <script type="text/babel">
 const{useState,useEffect,useCallback,useMemo,useRef}=React;
 
