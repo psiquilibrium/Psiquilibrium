@@ -14,17 +14,37 @@
 <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js" onerror="this.onerror=null;this.src='https://cdn.jsdelivr.net/npm/react-dom@18/umd/react-dom.production.min.js';"></script>
 <script src="https://unpkg.com/@babel/standalone/babel.min.js" onerror="this.onerror=null;this.src='https://cdn.jsdelivr.net/npm/@babel/standalone/babel.min.js';"></script>
 <script>
+window.__psiqStartupErrors=[];
 window.addEventListener("error",function(e){
+  window.__psiqStartupErrors.push({
+    message:e.message||"Error de carga",
+    file:e.filename||"",
+    line:e.lineno||"",
+    column:e.colno||""
+  });
+});
+window.addEventListener("unhandledrejection",function(e){
+  window.__psiqStartupErrors.push({message:String(e.reason&&e.reason.message||e.reason||"Error inesperado"),file:"promise",line:"",column:""});
+});
+function psiqShowStartupError(message){
   var root=document.getElementById("root");
   if(root&&root.textContent.indexOf("Cargando Psiquilibrium")!==-1){
-    root.innerHTML='<div style="padding:1rem;color:#c0392b;font-family:system-ui,sans-serif;">No se pudo cargar la app. Recarga la página o revisa la conexión.</div>';
+    root.innerHTML='<div style="padding:1rem;color:#c0392b;font-family:system-ui,sans-serif;line-height:1.45;"><strong>No se pudo cargar la app.</strong><br>'+message+'</div>';
   }
-});
+}
 window.addEventListener("load",function(){
   setTimeout(function(){
     var root=document.getElementById("root");
-    if(root&&root.textContent.indexOf("Cargando Psiquilibrium")!==-1&&(!window.React||!window.ReactDOM||!window.Babel)){
-      root.innerHTML='<div style="padding:1rem;color:#c0392b;font-family:system-ui,sans-serif;">No se pudieron cargar los componentes de la app. Revisa la conexión e intenta recargar.</div>';
+    if(!root||root.textContent.indexOf("Cargando Psiquilibrium")===-1)return;
+    if(!window.React||!window.ReactDOM||!window.Babel){
+      psiqShowStartupError("No se pudieron cargar React/Babel. Revisa la conexión e intenta recargar.");
+      return;
+    }
+    if(window.__psiqStartupErrors.length){
+      var err=window.__psiqStartupErrors[window.__psiqStartupErrors.length-1];
+      psiqShowStartupError((err.message||"Error desconocido")+" "+(err.line?("(línea "+err.line+")"):""));
+    }else{
+      psiqShowStartupError("El código no terminó de iniciar. Recarga la página.");
     }
   },6000);
 });
