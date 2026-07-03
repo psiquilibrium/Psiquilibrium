@@ -89,7 +89,7 @@ function validarToken(token) {
 function getUserFromToken(token) {
   const decoded = Utilities.newBlob(Utilities.base64Decode(token)).getDataAsString();
   const parts = decoded.split(":");
-  return { id: parts[0], rol: parts[1] };
+  return { id: String(parts[0] || "").trim(), rol: String(parts[1] || "").trim().toLowerCase() };
 }
 
 function esRolOperativo(user) {
@@ -309,7 +309,7 @@ function reservaFromRow(row) {
     id: String(id), consultorio: consultorioIdx, userId: String(userId),
     fecha: fechaStr, franja: Number(franja), duracion: Number(duracion),
     nota: String(nota || ""), tipo: String(tipo || "normal"),
-    estado: String(estado || "confirmada")
+    estado: String(estado || "confirmada").trim().toLowerCase()
   };
 }
 
@@ -594,7 +594,7 @@ function eliminarReserva(body, token) {
     for (let i = 1; i < data.length; i++) {
       if (String(data[i][0]) !== String(body.id)) continue;
       const isOwner = user.id === String(data[i][2]);
-      const estado = String(data[i][9] || "confirmada");
+      const estado = String(data[i][9] || "confirmada").trim().toLowerCase();
       const canDelete = user.rol === "admin" || isOwner || (user.rol === "asistente" && estado === "cancelada");
       if (!canDelete) return { ok: false, error: "Solo puedes eliminar reservas canceladas" };
       const antes = reservaAuditFromRow(data[i]);

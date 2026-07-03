@@ -240,9 +240,10 @@ function App(){
   const weekDates=getWeekDates(weekBase);
   const weekStart=dateKey(weekDates[0]);
   const weekEnd=dateKey(weekDates[5]);
-  const isAdmin=currentUser?.rol==="admin";
-  const isAssistant=currentUser?.rol==="asistente";
-  const isSocio=currentUser?.rol==="socio"||isAdmin;
+  const currentRole=String(currentUser?.rol||"").trim().toLowerCase();
+  const isAdmin=currentRole==="admin";
+  const isAssistant=currentRole==="asistente";
+  const isSocio=currentRole==="socio"||isAdmin;
   const canOperateReservations=isAdmin||isAssistant;
   const canCreateForOthers=isAdmin||isAssistant;
   const canManageBlocks=isAdmin||isAssistant;
