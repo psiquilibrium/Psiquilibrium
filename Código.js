@@ -59,18 +59,32 @@ function login(body) {
   const sheet = SpreadsheetApp.getActiveSpreadsheet().getSheetByName(SHEET_USUARIOS);
   const data = sheet.getDataRange().getValues();
   const users = [];
+  const seenUserIds = {};
+  const duplicateUserIds = {};
   let matchedUser = null;
+  const requestedId = String(body.userId || "").trim();
+  const requestedKey = requestedId.toLowerCase();
 
   for (let i = 1; i < data.length; i++) {
     const [id, nombre, rol, pass] = data[i];
     if (!id) continue;
-    users.push({ id: String(id), nombre: String(nombre), rol: String(rol) });
-    if (String(id).trim() === String(body.userId).trim() &&
+    const cleanId = String(id).trim();
+    const idKey = cleanId.toLowerCase();
+    const cleanUser = { id: cleanId, nombre: String(nombre).trim(), rol: String(rol).trim().toLowerCase() };
+    if (seenUserIds[idKey]) duplicateUserIds[idKey] = true;
+    else {
+      seenUserIds[idKey] = true;
+      users.push(cleanUser);
+    }
+    if (cleanId === requestedId &&
         String(pass).trim() === String(body.password).trim()) {
-      matchedUser = { id: String(id), nombre: String(nombre), rol: String(rol) };
+      matchedUser = cleanUser;
     }
   }
 
+  if (duplicateUserIds[requestedKey]) {
+    return { ok: false, error: `El ID "${requestedId}" está repetido en Usuarios. Solicita al administrador corregirlo antes de ingresar.` };
+  }
   if (matchedUser) {
     const token = Utilities.base64Encode(`${matchedUser.id}:${matchedUser.rol}:${new Date().toDateString()}`);
     return { ok: true, user: matchedUser, token, users };
@@ -716,12 +730,16 @@ function diagnosticarDatos(token) {
   if (user.rol !== "admin") return { ok: false, error: "Solo admin" };
 
   const ss = SpreadsheetApp.getActiveSpreadsheet();
+  const usuarios = diagnosticarUsuarios(ss);
   const reservas = diagnosticarReservas(ss);
   const bloqueos = diagnosticarBloqueos(ss);
   return {
     ok: true,
     generadoEn: Utilities.formatDate(new Date(), Session.getScriptTimeZone(), "yyyy-MM-dd HH:mm:ss"),
     resumen: {
+      usuariosRegistrados: usuarios.registrados,
+      usuariosDuplicados: usuarios.totalDuplicados,
+      usuariosInvalidos: usuarios.totalInvalidos,
       reservasActivas: reservas.activas,
       reservasDuplicadas: reservas.totalDuplicados,
       reservasInvalidas: reservas.totalInvalidos,
@@ -729,9 +747,47 @@ function diagnosticarDatos(token) {
       bloqueosDuplicados: bloqueos.totalDuplicados,
       bloqueosInvalidos: bloqueos.totalInvalidos
     },
+    usuarios,
     reservas,
     bloqueos
   };
+}
+
+function diagnosticarUsuarios(ss) {
+  const sheet = ss.getSheetByName(SHEET_USUARIOS);
+  const result = { registrados: 0, totalDuplicados: 0, totalInvalidos: 0, duplicados: [], invalidos: [] };
+  if (!sheet) {
+    result.invalidos.push({ fila: null, id: "", problemas: ["No existe hoja de usuarios"] });
+    result.totalInvalidos = result.invalidos.length;
+    return result;
+  }
+
+  const data = sheet.getDataRange().getValues();
+  const porId = {};
+  for (let i = 1; i < data.length; i++) {
+    const [id, nombre, rol] = data[i];
+    if (!id && !nombre && !rol) continue;
+    result.registrados++;
+    const cleanId = String(id || "").trim();
+    const cleanRole = String(rol || "").trim().toLowerCase();
+    const problemas = [];
+    if (!cleanId) problemas.push("Sin id");
+    if (!String(nombre || "").trim()) problemas.push("Sin nombre");
+    if (!["admin", "socio", "asistente", "profesional"].includes(cleanRole)) problemas.push("Rol inválido");
+    if (problemas.length) result.invalidos.push({ fila: i + 1, id: cleanId, problemas });
+    if (cleanId) {
+      const key = "id:" + cleanId.toLowerCase();
+      if (!porId[key]) porId[key] = [];
+      porId[key].push({ fila: i + 1, id: cleanId, problemas: [] });
+    }
+  }
+
+  const duplicados = gruposDuplicados(porId, "ID de usuario repetido");
+  result.totalDuplicados = duplicados.length;
+  result.duplicados = limitarEjemplos(duplicados);
+  result.invalidos = limitarEjemplos(result.invalidos);
+  result.totalInvalidos = result.invalidos.length;
+  return result;
 }
 
 function diagnosticarReservas(ss) {

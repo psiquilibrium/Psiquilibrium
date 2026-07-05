@@ -1245,6 +1245,9 @@ function App(){
                 <div style={s.muted}>{diagnostico.generadoEn}</div>
               </div>
               <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(150px,1fr))",gap:8}}>
+                <div style={s.muted}>Usuarios registrados: <strong>{countDiag(diagnostico.resumen.usuariosRegistrados)}</strong></div>
+                <div style={s.muted}>IDs de usuario repetidos: <strong>{countDiag(diagnostico.resumen.usuariosDuplicados)}</strong></div>
+                <div style={s.muted}>Usuarios inválidos: <strong>{countDiag(diagnostico.resumen.usuariosInvalidos)}</strong></div>
                 <div style={s.muted}>Reservas activas: <strong>{countDiag(diagnostico.resumen.reservasActivas)}</strong></div>
                 <div style={s.muted}>Reservas duplicadas: <strong>{countDiag(diagnostico.resumen.reservasDuplicadas)}</strong></div>
                 <div style={s.muted}>Reservas inválidas: <strong>{countDiag(diagnostico.resumen.reservasInvalidas)}</strong></div>
@@ -1253,11 +1256,13 @@ function App(){
                 <div style={s.muted}>Bloqueos inválidos: <strong>{countDiag(diagnostico.resumen.bloqueosInvalidos)}</strong></div>
               </div>
               <div style={{marginTop:8}}>
+                {renderEjemplos(diagnostico.usuarios?.duplicados)}
+                {renderEjemplos(diagnostico.usuarios?.invalidos)}
                 {renderEjemplos(diagnostico.reservas.duplicados)}
                 {renderEjemplos(diagnostico.reservas.invalidos)}
                 {renderEjemplos(diagnostico.bloqueos.duplicados)}
                 {renderEjemplos(diagnostico.bloqueos.invalidos)}
-                {countDiag(diagnostico.resumen.reservasDuplicadas)+countDiag(diagnostico.resumen.reservasInvalidas)+countDiag(diagnostico.resumen.bloqueosDuplicados)+countDiag(diagnostico.resumen.bloqueosInvalidos)===0&&<div style={s.muted}>No se encontraron duplicados ni inválidos activos.</div>}
+                {countDiag(diagnostico.resumen.usuariosDuplicados)+countDiag(diagnostico.resumen.usuariosInvalidos)+countDiag(diagnostico.resumen.reservasDuplicadas)+countDiag(diagnostico.resumen.reservasInvalidas)+countDiag(diagnostico.resumen.bloqueosDuplicados)+countDiag(diagnostico.resumen.bloqueosInvalidos)===0&&<div style={s.muted}>No se encontraron duplicados ni inválidos activos.</div>}
               </div>
             </div>
           )}
