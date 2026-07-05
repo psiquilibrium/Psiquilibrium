@@ -224,6 +224,8 @@ function App(){
   const pollRef=useRef(null);
   const fetchInFlightKeyRef=useRef(null);
   const latestFetchKeyRef=useRef(null);
+  const latestFetchIdRef=useRef(0);
+  const fetchSequenceRef=useRef(0);
   const agendaVersionRef=useRef({key:null,version:null});
   const dataVersionRef=useRef(0);
   const pendingMoveIdsRef=useRef(new Set());
@@ -306,33 +308,54 @@ function App(){
     try{sessionStorage.setItem(TODAS_FILTROS_KEY,JSON.stringify(todasFiltros));}catch{}
   },[todasFiltros]);
 
-  const fetchAll=useCallback(async(tkn)=>{
+  const hasPendingWrites=()=>pendingMoveIdsRef.current.size>0||formActionInFlightRef.current||pasteInFlightRef.current;
+  const mergePendingItems=(current,incoming,resolvedId)=>{
+    const resolvedKey=String(resolvedId||"");
+    const currentById=new Map(current.map(item=>[String(item.id),item]));
+    const protectedIds=new Set(current.filter(item=>{
+      const key=String(item.id);
+      return key!==resolvedKey&&(isTempId(key)||pendingMoveIdsRef.current.has(key));
+    }).map(item=>String(item.id)));
+    if(!protectedIds.size)return incoming;
+    const merged=incoming.filter(item=>!protectedIds.has(String(item.id))||currentById.has(String(item.id)))
+      .map(item=>protectedIds.has(String(item.id))?currentById.get(String(item.id)):item);
+    const mergedIds=new Set(merged.map(item=>String(item.id)));
+    current.forEach(item=>{if(protectedIds.has(String(item.id))&&!mergedIds.has(String(item.id)))merged.push(item);});
+    return merged;
+  };
+
+  const fetchAll=useCallback(async(tkn,force=false,resolvedId=null)=>{
     const activeToken=tkn||token;
     const needsFullData=view==="mis reservas"||view==="todas";
     const fetchKey=`${activeToken}|${needsFullData?"full":`${weekStart}|${weekEnd}`}`;
-    if(fetchInFlightKeyRef.current===fetchKey)return;
+    if(!force&&hasPendingWrites())return;
+    if(!force&&fetchInFlightKeyRef.current===fetchKey)return;
+    const fetchId=++fetchSequenceRef.current;
     fetchInFlightKeyRef.current=fetchKey;
     latestFetchKeyRef.current=fetchKey;
+    latestFetchIdRef.current=fetchId;
     const dataVersionAtStart=dataVersionRef.current;
     try{
       if(!needsFullData){
         const d=await api({action:"getAgenda",token:activeToken,desde:weekStart,hasta:weekEnd});
-        if(latestFetchKeyRef.current!==fetchKey)return;
-        if(dataVersionRef.current!==dataVersionAtStart)return;
+        if(latestFetchKeyRef.current!==fetchKey||latestFetchIdRef.current!==fetchId)return;
+        if(!force&&(dataVersionRef.current!==dataVersionAtStart||hasPendingWrites()))return;
         if(d.ok){
-          setReservas(normalizeReservas(d.reservas));
-          setBloqueos(normalizeBloqueos(d.bloqueos));
+          const nextReservas=normalizeReservas(d.reservas);
+          const nextBloqueos=normalizeBloqueos(d.bloqueos);
+          setReservas(current=>mergePendingItems(current,nextReservas,resolvedId));
+          setBloqueos(current=>mergePendingItems(current,nextBloqueos,resolvedId));
           agendaVersionRef.current={key:fetchKey,version:d.version||null};
           return;
         }
       }
       const [r,b]=await Promise.all([api({action:"getReservas",token:activeToken}),api({action:"getBloqueos",token:activeToken})]);
-      if(latestFetchKeyRef.current!==fetchKey)return;
-      if(dataVersionRef.current!==dataVersionAtStart)return;
-      if(r.ok) setReservas(normalizeReservas(r.reservas));
-      if(b.ok) setBloqueos(normalizeBloqueos(b.bloqueos));
+      if(latestFetchKeyRef.current!==fetchKey||latestFetchIdRef.current!==fetchId)return;
+      if(!force&&(dataVersionRef.current!==dataVersionAtStart||hasPendingWrites()))return;
+      if(r.ok){const next=normalizeReservas(r.reservas);setReservas(current=>mergePendingItems(current,next,resolvedId));}
+      if(b.ok){const next=normalizeBloqueos(b.bloqueos);setBloqueos(current=>mergePendingItems(current,next,resolvedId));}
       agendaVersionRef.current={key:fetchKey,version:null};
-    }catch{}finally{if(fetchInFlightKeyRef.current===fetchKey)fetchInFlightKeyRef.current=null;}
+    }catch{}finally{if(latestFetchIdRef.current===fetchId)fetchInFlightKeyRef.current=null;}
   },[token,weekStart,weekEnd,view]);
 
   const refreshIfNeeded=useCallback(async(tkn)=>{
@@ -476,13 +499,14 @@ function App(){
     setModal(null);showToast("Reserva creada");
     try{
       const d=await api({action:"crearReserva",token,consultorio:modal.consultorio,fecha:modal.fecha,franja:fi,duracion:dur,nota:form.nota,targetUserId});
-      if(d.ok){setReservas(prev=>prev.map(r=>r.id===tempId?{...r,id:d.id}:r));fetchAll(token);}
-      else{setError(d.error);setReservas(prev=>prev.filter(r=>r.id!==tempId));}
-    }catch{setError("Error al guardar.");setReservas(prev=>prev.filter(r=>r.id!==tempId));}
+      if(d.ok){setReservas(prev=>prev.map(r=>r.id===tempId?{...r,id:d.id}:r));await fetchAll(token,true);}
+      else{setError(d.error||"No se pudo guardar la reserva.");setReservas(prev=>prev.filter(r=>r.id!==tempId));await fetchAll(token,true);}
+    }catch{setError("No se pudo confirmar el guardado. La agenda se actualizó.");setReservas(prev=>prev.filter(r=>r.id!==tempId));await fetchAll(token,true);}
     finally{formActionInFlightRef.current=false;setLoading(false);}
   };
   const handleUpdate=async()=>{
     if(formActionInFlightRef.current)return;
+    if(isSyncing(modal.reserva.id)){setError("La reserva aún se está sincronizando. Intenta de nuevo en unos segundos.");return;}
     const fi=Number(form.franjaInicio),ff=Number(form.franjaFin);
     if(ff<=fi){setConflict(true);return;}
     const dur=(ff-fi)*30;
@@ -490,28 +514,31 @@ function App(){
     formActionInFlightRef.current=true;
     setLoading(true);
     const previous=modal.reserva;
+    beginSync(previous.id,"Actualizando...");
     markLocalChange();
     setReservas(prev=>prev.map(r=>r.id===modal.reserva.id?{...r,duracion:dur,nota:form.nota}:r));
     setModal(null);showToast("Reserva actualizada");
     try{
-      const d=await api({action:"editarReserva",token,id:modal.reserva.id,duracion:dur,nota:form.nota});
-      if(!d.ok){setReservas(prev=>prev.map(r=>r.id===previous.id?previous:r));setError(d.error);fetchAll(token);}
-    }catch{setReservas(prev=>prev.map(r=>r.id===previous.id?previous:r));setError("Error al actualizar.");fetchAll(token);}
-    finally{formActionInFlightRef.current=false;setLoading(false);}
+      const d=await api({action:"editarReserva",token,id:modal.reserva.id,duracion:dur,nota:form.nota,expectedVersion:previous.version||""});
+      if(d.ok)await fetchAll(token,true,previous.id);
+      else{setReservas(prev=>prev.map(r=>r.id===previous.id?previous:r));setError(d.error||"No se pudo actualizar la reserva.");await fetchAll(token,true,previous.id);}
+    }catch{setReservas(prev=>prev.map(r=>r.id===previous.id?previous:r));setError("No se pudo actualizar la reserva. La agenda se actualizó.");await fetchAll(token,true,previous.id);}
+    finally{endSync(previous.id);formActionInFlightRef.current=false;setLoading(false);}
   };
   const handleEstado=async(id,estado)=>{
     if(isSyncing(id)){setError("La reserva aún se está sincronizando. Intenta de nuevo en unos segundos.");fetchAll(token);return;}
     const previous=reservas.find(r=>r.id===id);
+    if(!previous){setError("Esta reserva ya no está disponible. La agenda se actualizó.");fetchAll(token,true);return;}
     beginSync(id,estado==="cancelada"?"Cancelando...":"Confirmando...");
     markLocalChange();
     setReservas(prev=>prev.map(r=>r.id===id?{...r,estado}:r));
     setModal(null);
     showToast(estado==="cancelada"?"Cancelada":"Confirmada",estado==="cancelada"?"danger":"success");
     try{
-      const d=await api({action:"cambiarEstado",token,id,estado});
-      if(d.ok) fetchAll(token);
-      else{if(previous)setReservas(prev=>prev.map(r=>r.id===id?previous:r));setError(d.error);fetchAll(token);}
-    }catch{if(previous)setReservas(prev=>prev.map(r=>r.id===id?previous:r));setError("Error.");fetchAll(token);}
+      const d=await api({action:"cambiarEstado",token,id,estado,expectedVersion:previous.version||""});
+      if(d.ok) await fetchAll(token,true,id);
+      else{setReservas(prev=>prev.map(r=>r.id===id?previous:r));setError(d.error||"No se pudo cambiar el estado de la reserva.");await fetchAll(token,true,id);}
+    }catch{setReservas(prev=>prev.map(r=>r.id===id?previous:r));setError("No se pudo cambiar el estado. La agenda se actualizó.");await fetchAll(token,true,id);}
     finally{endSync(id);}
   };
   const handleDelete=async(id)=>{
@@ -538,10 +565,10 @@ function App(){
     setModal(null);
     showToast("Eliminada","danger");
     try{
-      const d=await api({action:"eliminarReserva",token,id});
-      if(d.ok) fetchAll(token);
-      else{if(previous)setReservas(prev=>prev.some(r=>r.id===id)?prev:[...prev,previous]);setError(d.error);fetchAll(token);}
-    }catch{if(previous)setReservas(prev=>prev.some(r=>r.id===id)?prev:[...prev,previous]);setError("Error.");fetchAll(token);}
+      const d=await api({action:"eliminarReserva",token,id,expectedVersion:previous.version||""});
+      if(d.ok) await fetchAll(token,true,id);
+      else{setReservas(prev=>prev.some(r=>r.id===id)?prev:[...prev,previous]);setError(d.error||"No se pudo eliminar la reserva.");await fetchAll(token,true,id);}
+    }catch{setReservas(prev=>prev.some(r=>r.id===id)?prev:[...prev,previous]);setError("No se pudo eliminar la reserva. La agenda se actualizó.");await fetchAll(token,true,id);}
     finally{endSync(id);}
   };
 
@@ -568,9 +595,10 @@ function App(){
       setReservas(prev=>prev.map(x=>x.id===dragItem.id?{...x,consultorio:cons,fecha,franja:fi}:x));
       showToast("Reserva movida");
       try{
-        const d=await api({action:"moverReserva",token,id:dragItem.id,consultorio:cons,fecha,franja:fi});
-        if(!d.ok){setReservas(prev=>prev.map(x=>x.id===previous.id?previous:x));setError(d.error);fetchAll(token);}
-      }catch{setReservas(prev=>prev.map(x=>x.id===previous.id?previous:x));setError("Error al mover.");fetchAll(token);}
+        const d=await api({action:"moverReserva",token,id:dragItem.id,consultorio:cons,fecha,franja:fi,expectedVersion:previous.version||""});
+        if(d.ok)await fetchAll(token,true,previous.id);
+        else{setReservas(prev=>prev.map(x=>x.id===previous.id?previous:x));setError(d.error||"No se pudo mover la reserva.");await fetchAll(token,true,previous.id);}
+      }catch{setReservas(prev=>prev.map(x=>x.id===previous.id?previous:x));setError("No se pudo mover la reserva. La agenda se actualizó.");await fetchAll(token,true,previous.id);}
       finally{endSync(dragItem.id);}
     } else {
       const b=bloqueos.find(x=>x.id===dragItem.id);
@@ -579,17 +607,17 @@ function App(){
         setBloqueos(prev=>prev.map(x=>x.id===dragItem.id?{...x,consultorio:cons,fecha,franja:fi}:x));
         showToast("Bloqueo movido");
         try{
-          const d=await api({action:"moverBloqueo",token,id:b.id,consultorio:cons,fecha,franja:fi});
+          const d=await api({action:"moverBloqueo",token,id:b.id,consultorio:cons,fecha,franja:fi,expectedVersion:b.version||""});
           if(!d.ok){
             setBloqueos(prev=>prev.map(x=>x.id===b.id?b:x));
             setError(d.error);
-            fetchAll(token);
+            await fetchAll(token,true,b.id);
             endSync(b.id);
             setDragItem(null);
             return;
           }
-          fetchAll(token);
-        }catch{setBloqueos(prev=>prev.map(x=>x.id===b.id?b:x));setError("Error al mover bloqueo.");fetchAll(token);}
+          await fetchAll(token,true,b.id);
+        }catch{setBloqueos(prev=>prev.map(x=>x.id===b.id?b:x));setError("No se pudo mover el bloqueo. La agenda se actualizó.");await fetchAll(token,true,b.id);}
         finally{endSync(b.id);}
       }else{
         endSync(dragItem.id);
@@ -612,11 +640,11 @@ function App(){
     try{
       if(clipboard.type==="reserva"){
         const d=await api({action:"copiarReserva",token,id:clipboard.item.id,consultorio:cons,fecha,franja:fi});
-        if(d.ok){await fetchAll(token);setClipboard(null);showToast("Reserva pegada");}else setError(d.error);
+        if(d.ok){await fetchAll(token,true);setClipboard(null);showToast("Reserva pegada");}else setError(d.error);
       } else {
         const b=clipboard.item;
         const d=await api({action:"crearBloqueo",token,consultorio:cons,fecha,franja:fi,duracion:b.duracion,nota:b.nota,repeticion:b.repeticion});
-        if(d.ok){await fetchAll(token);setClipboard(null);showToast("Bloqueo pegado");}else setError(d.error);
+        if(d.ok){await fetchAll(token,true);setClipboard(null);showToast("Bloqueo pegado");}else setError(d.error);
       }
     }catch{setError("Error al pegar.");}
     finally{pasteInFlightRef.current=false;setLoading(false);}
@@ -638,9 +666,9 @@ function App(){
     showToast("Bloqueo creado");
     try{
       const d=await api({action:"crearBloqueo",token,consultorio:bForm.consultorio,fecha:bloqueoModal.fecha,franja:fi,duracion:dur,nota:bForm.nota,repeticion:bForm.repeticion});
-      if(d.ok){setBloqueos(prev=>prev.map(b=>b.id===tempId?{...b,id:d.id}:b));fetchAll(token);}
-      else{setBloqueos(prev=>prev.filter(b=>b.id!==tempId));setError(d.error);fetchAll(token);}
-    }catch{setBloqueos(prev=>prev.filter(b=>b.id!==tempId));setError("Error.");fetchAll(token);}
+      if(d.ok){setBloqueos(prev=>prev.map(b=>b.id===tempId?{...b,id:d.id}:b));await fetchAll(token,true);}
+      else{setBloqueos(prev=>prev.filter(b=>b.id!==tempId));setError(d.error);await fetchAll(token,true);}
+    }catch{setBloqueos(prev=>prev.filter(b=>b.id!==tempId));setError("No se pudo crear el bloqueo.");await fetchAll(token,true);}
     finally{formActionInFlightRef.current=false;setLoading(false);}
   };
   const handleEliminarBloqueo=async(id)=>{
@@ -669,10 +697,10 @@ function App(){
     setBloqueoModal(null);
     showToast("Bloqueo eliminado","danger");
     try{
-      const d=await api({action:"eliminarBloqueo",token,id});
-      if(d.ok) fetchAll(token);
-      else{if(previous)setBloqueos(prev=>prev.some(b=>b.id===id)?prev:[...prev,previous]);setError(d.error);fetchAll(token);}
-    }catch{if(previous)setBloqueos(prev=>prev.some(b=>b.id===id)?prev:[...prev,previous]);setError("Error.");fetchAll(token);}
+      const d=await api({action:"eliminarBloqueo",token,id,expectedVersion:previous.version||""});
+      if(d.ok) await fetchAll(token,true,id);
+      else{setBloqueos(prev=>prev.some(b=>b.id===id)?prev:[...prev,previous]);setError(d.error||"No se pudo eliminar el bloqueo.");await fetchAll(token,true,id);}
+    }catch{setBloqueos(prev=>prev.some(b=>b.id===id)?prev:[...prev,previous]);setError("No se pudo eliminar el bloqueo. La agenda se actualizó.");await fetchAll(token,true,id);}
     finally{endSync(id);}
   };
 

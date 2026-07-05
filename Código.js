@@ -323,7 +323,8 @@ function reservaFromRow(row) {
     id: String(id), consultorio: consultorioIdx, userId: String(userId),
     fecha: fechaStr, franja: Number(franja), duracion: Number(duracion),
     nota: String(nota || ""), tipo: String(tipo || "normal"),
-    estado: String(estado || "confirmada").trim().toLowerCase()
+    estado: String(estado || "confirmada").trim().toLowerCase(),
+    version: rowVersion("reserva", row)
   };
 }
 
@@ -507,6 +508,11 @@ function editarReserva(body, token) {
     for (let i = 1; i < data.length; i++) {
       if (String(data[i][0]) !== String(body.id)) continue;
       if (!esRolOperativo(user) && user.id !== String(data[i][2])) return { ok: false, error: "Sin permiso" };
+      if (!rowActiva(data[i][7])) return conflictoActualizado("reserva");
+      if (Number(data[i][5]) === Number(body.duracion) && String(data[i][6] || "") === String(body.nota || "")) {
+        return { ok: true, idempotent: true, version: rowVersion("reserva", data[i]) };
+      }
+      if (!versionEsperadaCoincide(body, "reserva", data[i])) return conflictoActualizado("reserva");
       if (hayConflicto(data[i][1], data[i][3], data[i][4], body.duracion, body.id)) return { ok: false, error: "Conflicto de horario" };
       const antes = reservaAuditFromRow(data[i]);
       sheet.getRange(i + 1, 6).setValue(body.duracion);
@@ -514,9 +520,9 @@ function editarReserva(body, token) {
       const despues = reservaAuditFromRow([data[i][0],data[i][1],data[i][2],data[i][3],data[i][4],body.duracion,body.nota || "",data[i][7],data[i][8],data[i][9]]);
       registrarAuditoria(user, "editar", "reserva", String(body.id), `editó reserva de ${resumenReservaAudit(despues)}`, antes, despues);
       invalidateAgendaCache();
-      return { ok: true };
+      return { ok: true, version: rowVersion("reserva", [data[i][0],data[i][1],data[i][2],data[i][3],data[i][4],body.duracion,body.nota || "",data[i][7],data[i][8],data[i][9]]) };
     }
-    return { ok: false, error: "Reserva no encontrada" };
+    return conflictoActualizado("reserva");
   });
 }
 
@@ -527,6 +533,7 @@ function cambiarEstado(body, token) {
     const data = sheet.getDataRange().getValues();
     for (let i = 1; i < data.length; i++) {
       if (String(data[i][0]) !== String(body.id)) continue;
+      if (!rowActiva(data[i][7])) return conflictoActualizado("reserva");
       const propietario = String(data[i][2]);
       // Admin puede cambiar cualquier estado. Asistente puede cancelar cualquiera. El dueño solo puede cancelar la suya.
       if (user.rol === "asistente") {
@@ -535,15 +542,21 @@ function cambiarEstado(body, token) {
         if (user.id !== propietario) return { ok: false, error: "Sin permiso" };
         if (body.estado !== "cancelada") return { ok: false, error: "Solo puedes cancelar tus propias reservas" };
       }
+      const estadoActual = String(data[i][9] || "confirmada").trim().toLowerCase();
+      const estadoSolicitado = String(body.estado || "").trim().toLowerCase();
+      if (estadoActual === estadoSolicitado) {
+        return { ok: true, idempotent: true, version: rowVersion("reserva", data[i]) };
+      }
+      if (!versionEsperadaCoincide(body, "reserva", data[i])) return conflictoActualizado("reserva");
       const antes = reservaAuditFromRow(data[i]);
       sheet.getRange(i + 1, 10).setValue(body.estado);
       const despues = reservaAuditFromRow([data[i][0],data[i][1],data[i][2],data[i][3],data[i][4],data[i][5],data[i][6],data[i][7],data[i][8],body.estado]);
       const accion = body.estado === "cancelada" ? "cancelar" : "reconfirmar";
       registrarAuditoria(user, accion, "reserva", String(body.id), `${accion === "cancelar" ? "canceló" : "reconfirmó"} reserva de ${resumenReservaAudit(despues)}`, antes, despues);
       invalidateAgendaCache();
-      return { ok: true };
+      return { ok: true, version: rowVersion("reserva", [data[i][0],data[i][1],data[i][2],data[i][3],data[i][4],data[i][5],data[i][6],data[i][7],data[i][8],body.estado]) };
     }
-    return { ok: false, error: "Reserva no encontrada" };
+    return conflictoActualizado("reserva");
   });
 }
 
@@ -556,10 +569,15 @@ function moverReserva(body, token) {
     for (let i = 1; i < data.length; i++) {
       if (String(data[i][0]) !== String(body.id)) continue;
       if (!esRolOperativo(user) && user.id !== String(data[i][2])) return { ok: false, error: "Sin permiso" };
+      if (!rowActiva(data[i][7])) return conflictoActualizado("reserva");
       const dur = Number(data[i][5]);
+      const consultorioNombre = NOMBRES_CONSULTORIOS[Number(body.consultorio)] || String(body.consultorio);
+      const mismoDestino = normalizarConsultorioIndice(data[i][1]) === normalizarConsultorioIndice(consultorioNombre) &&
+        fechaToString(data[i][3]) === fechaToString(body.fecha) && Number(data[i][4]) === Number(body.franja);
+      if (mismoDestino) return { ok: true, idempotent: true, version: rowVersion("reserva", data[i]) };
+      if (!versionEsperadaCoincide(body, "reserva", data[i])) return conflictoActualizado("reserva");
       if (estaBloquado(body.consultorio, body.fecha, body.franja, dur)) return { ok: false, error: "Franja bloqueada" };
       if (hayConflicto(body.consultorio, body.fecha, body.franja, dur, body.id)) return { ok: false, error: "Conflicto de horario" };
-      const consultorioNombre = NOMBRES_CONSULTORIOS[Number(body.consultorio)] || String(body.consultorio);
       const antes = reservaAuditFromRow(data[i]);
       sheet.getRange(i + 1, 2).setValue(consultorioNombre);
       sheet.getRange(i + 1, 4).setValue(body.fecha);
@@ -567,9 +585,9 @@ function moverReserva(body, token) {
       const despues = reservaAuditFromRow([data[i][0],consultorioNombre,data[i][2],body.fecha,body.franja,data[i][5],data[i][6],data[i][7],data[i][8],data[i][9]]);
       registrarAuditoria(user, "mover", "reserva", String(body.id), `movió reserva de ${resumenReservaAudit(antes)} → ${despues.consultorio} · ${despues.fecha} · ${despues.hora}`, antes, despues);
       invalidateAgendaCache();
-      return { ok: true };
+      return { ok: true, version: rowVersion("reserva", [data[i][0],consultorioNombre,data[i][2],body.fecha,body.franja,data[i][5],data[i][6],data[i][7],data[i][8],data[i][9]]) };
     }
-    return { ok: false, error: "Reserva no encontrada" };
+    return conflictoActualizado("reserva");
   });
 }
 
@@ -611,6 +629,8 @@ function eliminarReserva(body, token) {
       const estado = String(data[i][9] || "confirmada").trim().toLowerCase();
       const canDelete = user.rol === "admin" || isOwner || (user.rol === "asistente" && estado === "cancelada");
       if (!canDelete) return { ok: false, error: "Solo puedes eliminar reservas canceladas" };
+      if (!rowActiva(data[i][7])) return { ok: true, idempotent: true };
+      if (!versionEsperadaCoincide(body, "reserva", data[i])) return conflictoActualizado("reserva");
       const antes = reservaAuditFromRow(data[i]);
       sheet.getRange(i + 1, 8).setValue(false);
       const despues = reservaAuditFromRow([data[i][0],data[i][1],data[i][2],data[i][3],data[i][4],data[i][5],data[i][6],false,data[i][8],data[i][9]]);
@@ -618,7 +638,7 @@ function eliminarReserva(body, token) {
       invalidateAgendaCache();
       return { ok: true };
     }
-    return { ok: false, error: "Reserva no encontrada" };
+    return conflictoActualizado("reserva");
   });
 }
 
@@ -654,7 +674,44 @@ function bloqueoFromRow(row) {
   return {
     id: String(id), consultorio: consultorioIdx, franja: Number(franja),
     fecha: fechaToString(fecha), duracion: Number(duracion), nota: String(nota || ""),
-    repeticion: String(repeticion || "ninguna")
+    repeticion: String(repeticion || "ninguna"),
+    version: rowVersion("bloqueo", row)
+  };
+}
+
+function rowActiva(value) {
+  return value !== false && String(value).toUpperCase() !== "FALSE";
+}
+
+function normalizarConsultorioBloqueo(consultorio) {
+  return String(consultorio).toLowerCase() === "todos" ? "todos" : normalizarConsultorioIndice(consultorio);
+}
+
+function rowVersion(tipo, row) {
+  const values = tipo === "reserva"
+    ? [String(row[0] || ""), normalizarConsultorioIndice(row[1]), String(row[2] || ""), fechaToString(row[3]), Number(row[4]), Number(row[5]), String(row[6] || ""), rowActiva(row[7]), String(row[8] || "normal"), String(row[9] || "confirmada").trim().toLowerCase()]
+    : [String(row[0] || ""), normalizarConsultorioBloqueo(row[1]), Number(row[2]), fechaToString(row[3]), Number(row[4]), String(row[5] || ""), rowActiva(row[6]), String(row[7] || "ninguna")];
+  const text = JSON.stringify(values);
+  let hashA = 2166136261;
+  let hashB = 5381;
+  for (let i = 0; i < text.length; i++) {
+    const code = text.charCodeAt(i);
+    hashA = Math.imul(hashA ^ code, 16777619);
+    hashB = Math.imul(hashB, 33) ^ code;
+  }
+  return (hashA >>> 0).toString(16).padStart(8, "0") + (hashB >>> 0).toString(16).padStart(8, "0");
+}
+
+function versionEsperadaCoincide(body, tipo, row) {
+  return !body.expectedVersion || String(body.expectedVersion) === rowVersion(tipo, row);
+}
+
+function conflictoActualizado(tipo) {
+  const nombre = tipo === "bloqueo" ? "bloqueo" : "reserva";
+  return {
+    ok: false,
+    conflict: true,
+    error: `Este ${nombre} fue modificado desde otro dispositivo. La agenda se actualizó.`
   };
 }
 
@@ -686,6 +743,8 @@ function eliminarBloqueo(body, token) {
     const data = sheet.getDataRange().getValues();
     for (let i = 1; i < data.length; i++) {
       if (String(data[i][0]) === String(body.id)) {
+        if (!rowActiva(data[i][6])) return { ok: true, idempotent: true };
+        if (!versionEsperadaCoincide(body, "bloqueo", data[i])) return conflictoActualizado("bloqueo");
         const antes = bloqueoAuditFromRow(data[i]);
         sheet.getRange(i + 1, 7).setValue(false);
         const despues = bloqueoAuditFromRow([data[i][0],data[i][1],data[i][2],data[i][3],data[i][4],data[i][5],false,data[i][7]]);
@@ -694,7 +753,7 @@ function eliminarBloqueo(body, token) {
         return { ok: true };
       }
     }
-    return { ok: false, error: "Bloqueo no encontrado" };
+    return conflictoActualizado("bloqueo");
   });
 }
 
@@ -710,6 +769,11 @@ function moverBloqueo(body, token) {
 
     for (let i = 1; i < data.length; i++) {
       if (String(data[i][0]) === String(body.id)) {
+        if (!rowActiva(data[i][6])) return conflictoActualizado("bloqueo");
+        const mismoDestino = normalizarConsultorioBloqueo(data[i][1]) === normalizarConsultorioBloqueo(consultorioVal) &&
+          fechaToString(data[i][3]) === fechaToString(body.fecha) && Number(data[i][2]) === Number(body.franja);
+        if (mismoDestino) return { ok: true, idempotent: true, id: String(body.id), version: rowVersion("bloqueo", data[i]) };
+        if (!versionEsperadaCoincide(body, "bloqueo", data[i])) return conflictoActualizado("bloqueo");
         const antes = bloqueoAuditFromRow(data[i]);
         sheet.getRange(i + 1, 2).setValue(consultorioVal);
         sheet.getRange(i + 1, 3).setValue(body.franja);
@@ -717,10 +781,10 @@ function moverBloqueo(body, token) {
         const despues = bloqueoAuditFromRow([data[i][0],consultorioVal,body.franja,body.fecha,data[i][4],data[i][5],data[i][6],data[i][7]]);
         registrarAuditoria(user, "mover", "bloqueo", String(body.id), `movió bloqueo · ${resumenBloqueoAudit(antes)} → ${despues.consultorio} · ${despues.fecha} · ${despues.hora}`, antes, despues);
         invalidateAgendaCache();
-        return { ok: true, id: String(body.id) };
+        return { ok: true, id: String(body.id), version: rowVersion("bloqueo", [data[i][0],consultorioVal,body.franja,body.fecha,data[i][4],data[i][5],data[i][6],data[i][7]]) };
       }
     }
-    return { ok: false, error: "Bloqueo no encontrado" };
+    return conflictoActualizado("bloqueo");
   });
 }
 
