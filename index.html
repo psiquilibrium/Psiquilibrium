@@ -249,7 +249,7 @@ function App(){
   const canOperateReservations=isAdmin||isAssistant;
   const canCreateForOthers=isAdmin||isAssistant;
   const canManageBlocks=isAdmin||isAssistant;
-  const canDeleteCancelledReservations=isAdmin||isAssistant;
+  const canDeleteCancelledReservations=isAdmin||isAssistant||currentRole==="profesional";
   const canViewAllReservations=isSocio||isAssistant;
   const canViewActivity=isSocio||isAssistant;
   const canCreateBackup=isSocio;

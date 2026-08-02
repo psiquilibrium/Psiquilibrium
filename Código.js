@@ -126,6 +126,10 @@ function puedeVerReportes(user) {
   return user.rol === "admin" || user.rol === "socio";
 }
 
+function puedeEliminarReservaCancelada(user) {
+  return user.rol === "admin" || user.rol === "asistente" || user.rol === "profesional";
+}
+
 function getUserNameById(userId) {
   const sheet = SpreadsheetApp.getActiveSpreadsheet().getSheetByName(SHEET_USUARIOS);
   if (!sheet) return String(userId || "");
@@ -432,6 +436,12 @@ function resumenReservaAudit(r) {
   return `${r.profesional || r.userId} · ${r.consultorio} · ${r.fecha} · ${r.hora}`;
 }
 
+function resumenEliminacionReservaAudit(r) {
+  if (!r) return "";
+  const paciente = r.nota ? ` · Paciente/nota: ${r.nota}` : "";
+  return `eliminó reserva cancelada de ${r.profesional || r.userId}${paciente} · ${r.consultorio} · ${r.fecha} · ${r.hora} · estado previo: cancelada`;
+}
+
 function resumenBloqueoAudit(b) {
   if (!b) return "";
   return `${b.consultorio} · ${b.fecha} · ${b.hora}${b.nota ? " · " + b.nota : ""}`;
@@ -625,16 +635,15 @@ function eliminarReserva(body, token) {
 
     for (let i = 1; i < data.length; i++) {
       if (String(data[i][0]) !== String(body.id)) continue;
-      const isOwner = user.id === String(data[i][2]);
       const estado = String(data[i][9] || "confirmada").trim().toLowerCase();
-      const canDelete = user.rol === "admin" || isOwner || (user.rol === "asistente" && estado === "cancelada");
-      if (!canDelete) return { ok: false, error: "Solo puedes eliminar reservas canceladas" };
+      if (estado !== "cancelada") return { ok: false, error: "Solo se pueden eliminar reservas canceladas" };
+      if (!puedeEliminarReservaCancelada(user)) return { ok: false, error: "Sin permiso para eliminar reservas canceladas" };
       if (!rowActiva(data[i][7])) return { ok: true, idempotent: true };
       if (!versionEsperadaCoincide(body, "reserva", data[i])) return conflictoActualizado("reserva");
       const antes = reservaAuditFromRow(data[i]);
       sheet.getRange(i + 1, 8).setValue(false);
       const despues = reservaAuditFromRow([data[i][0],data[i][1],data[i][2],data[i][3],data[i][4],data[i][5],data[i][6],false,data[i][8],data[i][9]]);
-      registrarAuditoria(user, "eliminar", "reserva", String(body.id), `eliminó reserva de ${resumenReservaAudit(antes)}`, antes, despues);
+      registrarAuditoria(user, "eliminar", "reserva", String(body.id), resumenEliminacionReservaAudit(antes), antes, despues);
       invalidateAgendaCache();
       return { ok: true };
     }
