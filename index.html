@@ -29,7 +29,7 @@ window.addEventListener("unhandledrejection",function(e){
 function psiqShowStartupError(message){
   var root=document.getElementById("root");
   if(root&&root.textContent.indexOf("Cargando Psiquilibrium")!==-1){
-    root.innerHTML='<div style="padding:1rem;color:#c0392b;font-family:system-ui,sans-serif;line-height:1.45;"><strong>No se pudo cargar la app.</strong><br>'+message+'</div>';
+    root.innerHTML='<div style="max-width:360px;margin:3rem auto;padding:1rem;color:#c0392b;background:#fff;border:1px solid #f5c6c0;border-radius:10px;font-family:system-ui,sans-serif;line-height:1.45;"><strong>No se pudo cargar la app.</strong><br>'+message+'<br><button onclick="window.location.reload()" style="margin-top:12px;padding:9px 14px;border:1px solid #c5dce8;border-radius:8px;background:#1B3A6B;color:#fff;">Reintentar</button></div>';
   }
 }
 window.addEventListener("load",function(){
@@ -169,6 +169,28 @@ const FRANJAS=Array.from({length:20},(_,i)=>{const h=Math.floor(8+i/2),m=i%2===0
 const SESSION_KEY="psiq_v6";
 const TODAS_FILTROS_KEY="psiq_todas_filtros_v1";
 const DEFAULT_TODAS_FILTROS={profesional:"todos",consultorio:"todos",estado:"todos",texto:"",alcance:"semana",desde:"",hasta:""};
+const LOGIN_TIMEOUT_MS=15000;
+const READ_TIMEOUT_MS=20000;
+const POLL_TIMEOUT_MS=10000;
+const PERFORMANCE_METRICS_ENABLED=true; // Temporal: desactivar tras cerrar el diagnóstico.
+
+window.__psiqMetrics=window.__psiqMetrics||[];
+function recordMetric(name,startedAt,status="ok",serverMs=null){
+  if(!PERFORMANCE_METRICS_ENABLED)return null;
+  const durationMs=Math.round(performance.now()-startedAt);
+  const hasServerMs=serverMs!==null&&serverMs!==undefined&&Number.isFinite(Number(serverMs));
+  const metric={name,durationMs,status,serverMs:hasServerMs?Number(serverMs):null,at:new Date().toISOString()};
+  window.__psiqMetrics.push(metric);
+  if(window.__psiqMetrics.length>100)window.__psiqMetrics.shift();
+  console.info(`[Psiquilibrium] ${name}: ${durationMs} ms (${status})${metric.serverMs!==null?` · servidor ${metric.serverMs} ms`:""}`);
+  return metric;
+}
+
+function apiError(kind,message){
+  const error=new Error(message);
+  error.kind=kind;
+  return error;
+}
 
 function getWeekDates(base){
   const d=new Date(base),diff=d.getDay()===0?-6:1-d.getDay(),mon=new Date(d);
@@ -178,11 +200,47 @@ function getWeekDates(base){
 }
 function fmt(d){return `${String(d.getDate()).padStart(2,"0")}/${String(d.getMonth()+1).padStart(2,"0")}`;}
 function dateKey(d){return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,"0")}-${String(d.getDate()).padStart(2,"0")}`;}
-async function api(params){
+async function api(params,{timeoutMs=0,signal=null}={}){
+  const action=String(params.action||"solicitud");
+  const startedAt=performance.now();
   const u=new URL(SCRIPT_URL);
   Object.entries(params).forEach(([k,v])=>u.searchParams.set(k,String(v)));
-  const res=await fetch(u.toString(),{redirect:"follow"});
-  return res.json();
+  const controller=(timeoutMs||signal)&&window.AbortController?new AbortController():null;
+  let timedOut=false;
+  const abortFromSignal=()=>controller?.abort();
+  if(signal){
+    if(signal.aborted)abortFromSignal();
+    else signal.addEventListener("abort",abortFromSignal,{once:true});
+  }
+  const timeoutId=controller&&timeoutMs?setTimeout(()=>{timedOut=true;controller.abort();},timeoutMs):null;
+  try{
+    const res=await fetch(u.toString(),{redirect:"follow",signal:controller?.signal});
+    if(!res.ok)throw apiError("server",`Respuesta del servidor ${res.status}`);
+    let data;
+    try{data=await res.json();}
+    catch{throw apiError("server","El servidor devolvió una respuesta inválida");}
+    recordMetric(`api:${action}`,startedAt,data.ok===false?"error":"ok",data.performanceMs);
+    return data;
+  }catch(err){
+    let finalError=err;
+    if(controller?.signal.aborted)finalError=timedOut
+      ?apiError("timeout","El servidor tardó demasiado en responder")
+      :apiError("aborted","La solicitud fue reemplazada por una más reciente");
+    else if(navigator.onLine===false)finalError=apiError("offline","No hay conexión a internet");
+    else if(!err.kind)finalError=apiError("network","No se pudo conectar con el servidor");
+    recordMetric(`api:${action}`,startedAt,finalError.kind||"error");
+    throw finalError;
+  }finally{
+    if(timeoutId)clearTimeout(timeoutId);
+    if(signal)signal.removeEventListener("abort",abortFromSignal);
+  }
+}
+
+function requestErrorMessage(error,context="cargar la agenda"){
+  if(error?.kind==="timeout")return `El servidor tardó demasiado en ${context}. Intenta de nuevo.`;
+  if(error?.kind==="offline")return "No hay conexión a internet. Revisa tu conexión e intenta de nuevo.";
+  if(error?.kind==="network")return `No se pudo conectar para ${context}. Intenta de nuevo en unos segundos.`;
+  return error?.message||`No se pudo ${context}. Intenta de nuevo.`;
 }
 
 function App(){
@@ -207,6 +265,7 @@ function App(){
   const [reporte,setReporte]=useState(null);
   const [reporteLoading,setReporteLoading]=useState(false);
   const [reporteError,setReporteError]=useState(null);
+  const [initialLoad,setInitialLoad]=useState({status:"idle",message:""});
   const [form,setForm]=useState({nota:"",franjaInicio:"0",franjaFin:"2",profesionalId:""});
   const [bForm,setBForm]=useState({nota:"",franjaInicio:"0",franjaFin:"2",repeticion:"ninguna",consultorio:"0"});
   const [todasFiltros,setTodasFiltros]=useState(()=>{
@@ -222,7 +281,13 @@ function App(){
   const [isMobile,setIsMobile]=useState(()=>window.innerWidth<=720);
   const [mobileDia,setMobileDia]=useState(()=>Math.min(Math.max((new Date().getDay()||1)-1,0),5));
   const pollRef=useRef(null);
+  const pollRefreshInFlightRef=useRef(false);
+  const loginInFlightRef=useRef(false);
+  const initialRenderStartedRef=useRef(0);
+  const initialRenderMeasuredRef=useRef(false);
   const fetchInFlightKeyRef=useRef(null);
+  const fetchPromiseRef=useRef(null);
+  const agendaAbortRef=useRef(null);
   const latestFetchKeyRef=useRef(null);
   const latestFetchIdRef=useRef(0);
   const fetchSequenceRef=useRef(0);
@@ -324,52 +389,107 @@ function App(){
     return merged;
   };
 
+  const expireSession=useCallback((message="Tu sesión venció. Ingresa de nuevo.")=>{
+    sessionStorage.removeItem(SESSION_KEY);
+    if(pollRef.current){clearInterval(pollRef.current);pollRef.current=null;}
+    if(agendaAbortRef.current){agendaAbortRef.current.abort();agendaAbortRef.current=null;}
+    pollRefreshInFlightRef.current=false;
+    agendaVersionRef.current={key:null,version:null};
+    setReservas([]);
+    setBloqueos([]);
+    setCurrentUser(null);
+    setToken(null);
+    setInitialLoad({status:"idle",message:""});
+    setScreen("login");
+    setError(message);
+  },[]);
+
   const fetchAll=useCallback(async(tkn,force=false,resolvedId=null)=>{
     const activeToken=tkn||token;
+    if(!activeToken)return {ok:false,error:"No hay una sesión activa.",unauthorized:true};
     const needsFullData=view==="mis reservas"||view==="todas";
     const fetchKey=`${activeToken}|${needsFullData?"full":`${weekStart}|${weekEnd}`}`;
-    if(!force&&hasPendingWrites())return;
-    if(!force&&fetchInFlightKeyRef.current===fetchKey)return;
+    if(!force&&hasPendingWrites())return {ok:false,skipped:true};
+    if(fetchPromiseRef.current&&fetchInFlightKeyRef.current===fetchKey){
+      if(!force)return fetchPromiseRef.current;
+      await fetchPromiseRef.current;
+    }
+    if(agendaAbortRef.current)agendaAbortRef.current.abort();
+    const requestController=window.AbortController?new AbortController():null;
+    agendaAbortRef.current=requestController;
     const fetchId=++fetchSequenceRef.current;
     fetchInFlightKeyRef.current=fetchKey;
     latestFetchKeyRef.current=fetchKey;
     latestFetchIdRef.current=fetchId;
     const dataVersionAtStart=dataVersionRef.current;
-    try{
-      if(!needsFullData){
-        const d=await api({action:"getAgenda",token:activeToken,desde:weekStart,hasta:weekEnd});
-        if(latestFetchKeyRef.current!==fetchKey||latestFetchIdRef.current!==fetchId)return;
-        if(!force&&(dataVersionRef.current!==dataVersionAtStart||hasPendingWrites()))return;
-        if(d.ok){
+    const task=(async()=>{
+      try{
+        if(!needsFullData){
+          const d=await api({action:"getAgenda",token:activeToken,desde:weekStart,hasta:weekEnd},{timeoutMs:READ_TIMEOUT_MS,signal:requestController?.signal});
+          if(latestFetchKeyRef.current!==fetchKey||latestFetchIdRef.current!==fetchId)return {ok:false,skipped:true};
+          if(!force&&(dataVersionRef.current!==dataVersionAtStart||hasPendingWrites()))return {ok:false,skipped:true};
+          if(!d.ok)return {ok:false,error:d.error||"No se pudo cargar la semana.",unauthorized:d.error==="No autorizado"};
           const nextReservas=normalizeReservas(d.reservas);
           const nextBloqueos=normalizeBloqueos(d.bloqueos);
           setReservas(current=>mergePendingItems(current,nextReservas,resolvedId));
           setBloqueos(current=>mergePendingItems(current,nextBloqueos,resolvedId));
           agendaVersionRef.current={key:fetchKey,version:d.version||null};
-          return;
+          return {ok:true};
         }
+        const [r,b]=await Promise.all([
+          api({action:"getReservas",token:activeToken},{timeoutMs:READ_TIMEOUT_MS,signal:requestController?.signal}),
+          api({action:"getBloqueos",token:activeToken},{timeoutMs:READ_TIMEOUT_MS,signal:requestController?.signal})
+        ]);
+        if(latestFetchKeyRef.current!==fetchKey||latestFetchIdRef.current!==fetchId)return {ok:false,skipped:true};
+        if(!force&&(dataVersionRef.current!==dataVersionAtStart||hasPendingWrites()))return {ok:false,skipped:true};
+        if(!r.ok||!b.ok){
+          const error=!r.ok?r.error:b.error;
+          return {ok:false,error:error||"No se pudieron cargar los datos.",unauthorized:error==="No autorizado"};
+        }
+        setReservas(current=>mergePendingItems(current,normalizeReservas(r.reservas),resolvedId));
+        setBloqueos(current=>mergePendingItems(current,normalizeBloqueos(b.bloqueos),resolvedId));
+        const fullVersion=r.version&&r.version===b.version?r.version:null;
+        agendaVersionRef.current={key:fetchKey,version:fullVersion};
+        return {ok:true};
+      }catch(err){
+        if(err.kind==="aborted")return {ok:false,skipped:true};
+        return {ok:false,error:requestErrorMessage(err,"cargar la agenda"),kind:err.kind||"server"};
       }
-      const [r,b]=await Promise.all([api({action:"getReservas",token:activeToken}),api({action:"getBloqueos",token:activeToken})]);
-      if(latestFetchKeyRef.current!==fetchKey||latestFetchIdRef.current!==fetchId)return;
-      if(!force&&(dataVersionRef.current!==dataVersionAtStart||hasPendingWrites()))return;
-      if(r.ok){const next=normalizeReservas(r.reservas);setReservas(current=>mergePendingItems(current,next,resolvedId));}
-      if(b.ok){const next=normalizeBloqueos(b.bloqueos);setBloqueos(current=>mergePendingItems(current,next,resolvedId));}
-      agendaVersionRef.current={key:fetchKey,version:null};
-    }catch{}finally{if(latestFetchIdRef.current===fetchId)fetchInFlightKeyRef.current=null;}
+    })();
+    fetchPromiseRef.current=task;
+    try{return await task;}
+    finally{
+      if(fetchPromiseRef.current===task)fetchPromiseRef.current=null;
+      if(agendaAbortRef.current===requestController)agendaAbortRef.current=null;
+      if(latestFetchIdRef.current===fetchId)fetchInFlightKeyRef.current=null;
+    }
   },[token,weekStart,weekEnd,view]);
 
   const refreshIfNeeded=useCallback(async(tkn)=>{
     const activeToken=tkn||token;
+    if(!activeToken||pollRefreshInFlightRef.current||hasPendingWrites())return {ok:false,skipped:true};
+    pollRefreshInFlightRef.current=true;
+    const startedAt=performance.now();
     const needsFullData=view==="mis reservas"||view==="todas";
-    if(needsFullData){fetchAll(activeToken);return;}
-    const fetchKey=`${activeToken}|${weekStart}|${weekEnd}`;
+    const fetchKey=`${activeToken}|${needsFullData?"full":`${weekStart}|${weekEnd}`}`;
+    let result={ok:true,unchanged:true};
     try{
-      const d=await api({action:"getAgendaVersion",token:activeToken,desde:weekStart,hasta:weekEnd});
-      if(!d.ok){fetchAll(activeToken);return;}
-      if(agendaVersionRef.current.key!==fetchKey||agendaVersionRef.current.version!==d.version){
-        fetchAll(activeToken);
+      const d=await api({action:"getAgendaVersion",token:activeToken,desde:weekStart,hasta:weekEnd},{timeoutMs:POLL_TIMEOUT_MS});
+      if(!d.ok){
+        result={ok:false,error:d.error||"No se pudo actualizar la agenda.",unauthorized:d.error==="No autorizado"};
+        return result;
       }
-    }catch{fetchAll(activeToken);}
+      if(agendaVersionRef.current.key!==fetchKey||agendaVersionRef.current.version!==d.version){
+        result=await fetchAll(activeToken);
+      }
+      return result;
+    }catch(err){
+      result={ok:false,error:requestErrorMessage(err,"actualizar la agenda"),kind:err.kind||"server"};
+      return result;
+    }finally{
+      pollRefreshInFlightRef.current=false;
+      recordMetric("polling:ciclo",startedAt,result.ok?"ok":result.skipped?"omitido":"error");
+    }
   },[token,weekStart,weekEnd,view,fetchAll]);
 
   const fetchAuditoria=useCallback(async()=>{
@@ -377,10 +497,10 @@ function App(){
     setAuditoriaLoading(true);
     setAuditoriaError(null);
     try{
-      const d=await api({action:"getAuditoria",token,limit:100});
+      const d=await api({action:"getAuditoria",token,limit:100},{timeoutMs:READ_TIMEOUT_MS});
       if(d.ok)setAuditoria(d.eventos||[]);
       else setAuditoriaError(d.error||"No se pudo cargar actividad.");
-    }catch{setAuditoriaError("Error al cargar actividad.");}
+    }catch(err){setAuditoriaError(requestErrorMessage(err,"cargar la actividad"));}
     setAuditoriaLoading(false);
   },[token]);
 
@@ -405,28 +525,80 @@ function App(){
     setReporteLoading(true);
     setReporteError(null);
     try{
-      const d=await api({action:"getReporteReservas",token,desde,hasta,profesional:reporteFiltros.profesional});
+      const d=await api({action:"getReporteReservas",token,desde,hasta,profesional:reporteFiltros.profesional},{timeoutMs:READ_TIMEOUT_MS});
       if(d.ok)setReporte(d);
       else setReporteError(d.error||"No se pudo cargar el reporte.");
-    }catch{setReporteError("Error al cargar reporte.");}
+    }catch(err){setReporteError(requestErrorMessage(err,"cargar el reporte"));}
     setReporteLoading(false);
   },[token,canViewReports,getReporteRango,reporteFiltros.profesional]);
 
-  useEffect(()=>{
-    if(screen==="app"&&token){
-      if(view==="actividad"||view==="reportes")return;
-      fetchAll(token);
-      const pollMs=view==="mis reservas"||view==="todas"?120000:30000;
-      pollRef.current=setInterval(()=>{if(!document.hidden)refreshIfNeeded(token);},pollMs);
-      const onVisibilityChange=()=>{if(!document.hidden)refreshIfNeeded(token);};
-      document.addEventListener("visibilitychange",onVisibilityChange);
-      return()=>{
-        if(pollRef.current)clearInterval(pollRef.current);
-        document.removeEventListener("visibilitychange",onVisibilityChange);
-      };
+  const loadInitialAgenda=useCallback(async()=>{
+    if(!token)return;
+    const startedAt=performance.now();
+    setInitialLoad({status:"loading",message:""});
+    setError(null);
+    const result=await fetchAll(token);
+    recordMetric("agenda:carga-inicial",startedAt,result.ok?"ok":result.skipped?"omitido":"error");
+    if(result.unauthorized){expireSession();return;}
+    if(!result.ok){
+      setInitialLoad({status:"error",message:result.error||"La carga se interrumpió. Intenta de nuevo."});
+      return;
     }
-    return()=>{if(pollRef.current)clearInterval(pollRef.current);};
-  },[screen,token,fetchAll,refreshIfNeeded,view]);
+    initialRenderStartedRef.current=performance.now();
+    initialRenderMeasuredRef.current=false;
+    setInitialLoad({status:"ready",message:""});
+  },[token,fetchAll,expireSession]);
+
+  useEffect(()=>{
+    if(screen==="app"&&token&&initialLoad.status==="idle")loadInitialAgenda();
+  },[screen,token,initialLoad.status,loadInitialAgenda]);
+
+  useEffect(()=>{
+    if(initialLoad.status!=="ready"||initialRenderMeasuredRef.current)return;
+    let frame1=null,frame2=null;
+    frame1=requestAnimationFrame(()=>{
+      frame2=requestAnimationFrame(()=>{
+        if(initialRenderMeasuredRef.current)return;
+        initialRenderMeasuredRef.current=true;
+        recordMetric("agenda:render-inicial",initialRenderStartedRef.current,"ok");
+      });
+    });
+    return()=>{if(frame1)cancelAnimationFrame(frame1);if(frame2)cancelAnimationFrame(frame2);};
+  },[initialLoad.status]);
+
+  useEffect(()=>{
+    if(pollRef.current){clearInterval(pollRef.current);pollRef.current=null;}
+    if(screen!=="app"||!token||initialLoad.status!=="ready"||view==="actividad"||view==="reportes")return;
+
+    let cancelled=false;
+    const needsFullData=view==="mis reservas"||view==="todas";
+    const fetchKey=`${token}|${needsFullData?"full":`${weekStart}|${weekEnd}`}`;
+    const pollMs=needsFullData?120000:30000;
+    const runRefresh=async()=>{
+      if(document.hidden||cancelled)return;
+      const result=await refreshIfNeeded(token);
+      if(cancelled||result?.skipped)return;
+      if(result?.unauthorized){expireSession();return;}
+      if(result&&!result.ok)setError(result.error||"No se pudo actualizar la agenda. Puedes reintentar con el botón Actualizar.");
+    };
+    const startPolling=async()=>{
+      if(agendaVersionRef.current.key!==fetchKey){
+        const result=await fetchAll(token);
+        if(cancelled)return;
+        if(result?.unauthorized){expireSession();return;}
+        if(!result?.ok&&!result?.skipped){setError(result?.error||"No se pudo cargar esta vista.");return;}
+      }
+      if(cancelled)return;
+      pollRef.current=setInterval(runRefresh,pollMs);
+      document.addEventListener("visibilitychange",runRefresh);
+    };
+    startPolling();
+    return()=>{
+      cancelled=true;
+      if(pollRef.current){clearInterval(pollRef.current);pollRef.current=null;}
+      document.removeEventListener("visibilitychange",runRefresh);
+    };
+  },[screen,token,initialLoad.status,view,weekStart,weekEnd,fetchAll,refreshIfNeeded,expireSession]);
 
   useEffect(()=>{
     if(screen==="app"&&token&&view==="actividad")fetchAuditoria();
@@ -437,13 +609,34 @@ function App(){
   },[screen,token,view]);
 
   const handleLogin=async()=>{
+    if(loginInFlightRef.current)return;
+    const userId=loginForm.userId.trim();
+    if(!userId||!loginForm.password){setError("Escribe tu usuario y contraseña.");return;}
+    loginInFlightRef.current=true;
     setError(null);setLoading(true);
     try{
-      const d=await api({action:"login",userId:loginForm.userId,password:loginForm.password});
-      if(d.ok){setCurrentUser(d.user);setToken(d.token);setAllUsers(d.users||[]);sessionStorage.setItem(SESSION_KEY,JSON.stringify({user:d.user,tok:d.token,users:d.users||[]}));setScreen("app");}
+      const d=await api({action:"login",userId,password:loginForm.password},{timeoutMs:LOGIN_TIMEOUT_MS});
+      if(d.ok){
+        agendaVersionRef.current={key:null,version:null};
+        setCurrentUser(d.user);setToken(d.token);setAllUsers(d.users||[]);
+        setInitialLoad({status:"idle",message:""});
+        sessionStorage.setItem(SESSION_KEY,JSON.stringify({user:d.user,tok:d.token,users:d.users||[]}));
+        setScreen("app");
+      }
       else setError(d.error||"Credenciales incorrectas");
-    }catch{setError("No se pudo conectar.");}
-    setLoading(false);
+    }catch(err){setError(requestErrorMessage(err,"iniciar sesión"));}
+    finally{loginInFlightRef.current=false;setLoading(false);}
+  };
+
+  const handleLogout=()=>expireSession("");
+
+  const handleManualRefresh=async()=>{
+    if(view==="actividad"){fetchAuditoria();return;}
+    if(view==="reportes"){fetchReporte();return;}
+    const result=await fetchAll(token,true);
+    if(result?.unauthorized){expireSession();return;}
+    if(!result?.ok&&!result?.skipped)setError(result?.error||"No se pudo actualizar la agenda.");
+    else if(result?.ok)showToast("Agenda actualizada");
   };
 
   // Helpers
@@ -966,6 +1159,23 @@ function App(){
     </div>
   );
 
+  if(initialLoad.status!=="ready")return(
+    <div style={{maxWidth:420,margin:"3rem auto",...s.card,textAlign:"center"}}>
+      <div style={{display:"flex",alignItems:"center",justifyContent:"center",gap:10,marginBottom:14}}>
+        <div style={{width:28,height:28,border:"2px solid var(--cyan)",borderRadius:6,transform:"rotate(45deg)"}}></div>
+        <strong style={{fontSize:18}}>Psiquilibrium</strong>
+      </div>
+      {initialLoad.status==="error"?(<>
+        <div className="notice notice-danger" style={{textAlign:"left"}}><span>{initialLoad.message}</span></div>
+        <button onClick={loadInitialAgenda} style={{width:"100%",fontWeight:700,background:"var(--navy)",color:"#fff",border:"none",marginBottom:8}}>Reintentar</button>
+        <button onClick={handleLogout} style={{width:"100%",color:"var(--muted)"}}>Volver al ingreso</button>
+      </>):(<>
+        <div style={{fontWeight:700,marginBottom:6}}>Cargando agenda…</div>
+        <div style={s.muted}>Validando la sesión y consultando la semana visible.</div>
+      </>)}
+    </div>
+  );
+
   const currentWeekStart=dateKey(getWeekDates(new Date())[0]);
   const misReservas=reservas
     .filter(r=>r.userId===currentUser?.id&&r.estado!=="cancelada"&&r.fecha>=currentWeekStart)
@@ -1042,9 +1252,9 @@ function App(){
             {["consolidada","semana","mis reservas",...(canViewAllReservations?["todas"]:[]),...(canViewReports?["reportes"]:[]),...(canViewActivity?["actividad"]:[])].map(v=>(
               <button key={v} onClick={()=>setView(v)} className={`tab-button ${view===v?"active":""}`}>{viewLabels[v]}</button>
             ))}
-            <button onClick={()=>view==="actividad"?fetchAuditoria():view==="reportes"?fetchReporte():fetchAll(token)} className="icon-button" style={{fontSize:12,color:"var(--muted)"}} title="Actualizar">↺</button>
+            <button onClick={handleManualRefresh} className="icon-button" style={{fontSize:12,color:"var(--muted)"}} title="Actualizar">↺</button>
             <button onClick={()=>window.location.reload()} className="icon-button" style={{fontSize:12,color:"var(--muted)"}} title="Recargar app">⟳ App</button>
-            <button onClick={()=>{sessionStorage.removeItem(SESSION_KEY);setScreen("login");setCurrentUser(null);setToken(null);}} className="icon-button" style={{fontSize:12,color:"var(--muted)"}}>Salir</button>
+            <button onClick={handleLogout} className="icon-button" style={{fontSize:12,color:"var(--muted)"}}>Salir</button>
           </div>
         </div>
       </div>

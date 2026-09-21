@@ -8,6 +8,7 @@ const SHEET_BLOQUEOS = "Bloqueos";
 const SHEET_AUDITORIA = "Auditoria";
 const NOMBRES_CONSULTORIOS = ["Consultorio 1","Consultorio 2","Consultorio 3","Consultorio 4"];
 const CACHE_AGENDA_PREFIX = "agenda_v1_";
+const PERFORMANCE_METRICS_ENABLED = true; // Temporal: desactivar tras cerrar el diagnóstico.
 
 // Franjas: 0=8:00, 1=8:30, 2=9:00 ... 19=17:30, 20=18:00 (no incluida)
 // Sábado hasta las 12:00 = franja 8
@@ -17,21 +18,23 @@ function doPost(e) { return handle(e); }
 function doOptions(e) { return ContentService.createTextOutput("").setMimeType(ContentService.MimeType.TEXT); }
 
 function handle(e) {
+  const startedAt = Date.now();
+  let action = "desconocida";
   try {
     const params = e.parameter || {};
     const body = (e.postData && e.postData.contents) ? JSON.parse(e.postData.contents) : {};
     const merged = { ...params, ...body };
-    const action = merged.action;
+    action = merged.action || "desconocida";
     const token = merged.token;
 
-    if (action === "login") return resp(login(merged));
-    if (!validarToken(token)) return resp({ ok: false, error: "No autorizado" });
+    if (action === "login") return respMedida(login(merged), action, startedAt);
+    if (!validarToken(token)) return respMedida({ ok: false, error: "No autorizado" }, action, startedAt);
 
     switch (action) {
-      case "getAgenda":              return resp(getAgenda(merged));
-      case "getAgendaVersion":       return resp(getAgendaVersion(merged));
-      case "getReservas":            return resp(getReservas(token));
-      case "getReporteReservas":     return resp(getReporteReservas(merged, token));
+      case "getAgenda":              return respMedida(getAgenda(merged), action, startedAt);
+      case "getAgendaVersion":       return respMedida(getAgendaVersion(merged), action, startedAt);
+      case "getReservas":            return respMedida(getReservas(token), action, startedAt);
+      case "getReporteReservas":     return respMedida(getReporteReservas(merged, token), action, startedAt);
       case "crearReserva":           return resp(crearReserva(merged, token));
       case "editarReserva":          return resp(editarReserva(merged, token));
       case "eliminarReserva":        return resp(eliminarReserva(merged, token));
@@ -41,8 +44,8 @@ function handle(e) {
       case "crearBloqueo":           return resp(crearBloqueo(merged, token));
       case "moverBloqueo":           return resp(moverBloqueo(merged, token));
       case "eliminarBloqueo":        return resp(eliminarBloqueo(merged, token));
-      case "getBloqueos":            return resp(getBloqueos());
-      case "getAuditoria":           return resp(getAuditoria(merged, token));
+      case "getBloqueos":            return respMedida(getBloqueos(), action, startedAt);
+      case "getAuditoria":           return respMedida(getAuditoria(merged, token), action, startedAt);
       case "crearRespaldoManual":    return resp(crearRespaldoManual(token));
       case "generarPreestablecidas": return resp(generarPreestablecidas(merged, token));
       case "diagnosticarDatos":      return resp(diagnosticarDatos(token));
@@ -50,8 +53,17 @@ function handle(e) {
       default: return resp({ ok: false, error: "Acción no reconocida" });
     }
   } catch (err) {
-    return resp({ ok: false, error: err.message });
+    return respMedida({ ok: false, error: err.message }, action, startedAt);
   }
+}
+
+function respMedida(data, action, startedAt) {
+  const durationMs = Date.now() - startedAt;
+  if (PERFORMANCE_METRICS_ENABLED) {
+    if (data && typeof data === "object") data.performanceMs = durationMs;
+    console.log(`[Psiquilibrium] ${action}: ${durationMs} ms`);
+  }
+  return resp(data);
 }
 
 // ── Autenticación ────────────────────────────────────────────
@@ -194,7 +206,7 @@ function getReservas(token) {
     if (reserva && !puedeVerListadoCompletoReservas(user) && reserva.userId !== user.id) continue;
     if (reserva) reservas.push(reserva);
   }
-  return { ok: true, reservas };
+  return { ok: true, reservas, version: getAgendaCacheVersion() };
 }
 
 function puedeVerListadoCompletoReservas(user) {
@@ -661,7 +673,7 @@ function getBloqueos() {
     const bloqueo = bloqueoFromRow(data[i]);
     if (bloqueo) bloqueos.push(bloqueo);
   }
-  return { ok: true, bloqueos };
+  return { ok: true, bloqueos, version: getAgendaCacheVersion() };
 }
 
 function ensureBloqueosSheet(ss) {
