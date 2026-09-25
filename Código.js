@@ -6,10 +6,12 @@ const SHEET_RESERVAS = "Reservas";
 const SHEET_USUARIOS = "Usuarios";
 const SHEET_BLOQUEOS = "Bloqueos";
 const SHEET_AUDITORIA = "Auditoria";
+const SHEET_OPERACIONES = "Operaciones";
 const NOMBRES_CONSULTORIOS = ["Consultorio 1","Consultorio 2","Consultorio 3","Consultorio 4"];
 const ROLES_USUARIO = ["admin", "socio", "asistente", "profesional"];
 const USER_HEADERS = ["id", "nombre", "rol", "contraseña", "correo", "activo"];
 const CACHE_AGENDA_PREFIX = "agenda_v1_";
+const OPERATION_RETENTION_DAYS = 180;
 const PERFORMANCE_METRICS_ENABLED = true; // Temporal: desactivar tras cerrar el diagnóstico.
 
 // Franjas: 0=8:00, 1=8:30, 2=9:00 ... 19=17:30, 20=18:00 (no incluida)
@@ -22,11 +24,13 @@ function doOptions(e) { return ContentService.createTextOutput("").setMimeType(C
 function handle(e) {
   const startedAt = Date.now();
   let action = "desconocida";
+  let requestOperationId = "";
   try {
     const params = e.parameter || {};
     const body = (e.postData && e.postData.contents) ? JSON.parse(e.postData.contents) : {};
     const merged = { ...params, ...body };
     action = merged.action || "desconocida";
+    requestOperationId = String(merged.operationId || "").trim();
     const token = merged.token;
 
     if (action === "login") return respMedida(login(merged), action, startedAt);
@@ -58,7 +62,7 @@ function handle(e) {
       default: return resp({ ok: false, error: "Acción no reconocida" });
     }
   } catch (err) {
-    return respMedida({ ok: false, error: err.message }, action, startedAt);
+    return respMedida({ ok: false, error: err.message, retryable: !!requestOperationId }, action, startedAt);
   }
 }
 
@@ -524,22 +528,152 @@ function reservaFromRow(row) {
   };
 }
 
+// ── Idempotencia de operaciones de creación ─────────────────
+function normalizarOperationId(value) {
+  const operationId = String(value || "").trim();
+  if (!operationId) return "";
+  if (operationId.length < 16 || operationId.length > 120 || !/^[A-Za-z0-9._:-]+$/.test(operationId)) {
+    throw new Error("Identificador de operación inválido. Actualiza la app e intenta de nuevo.");
+  }
+  return operationId;
+}
+
+function hashOperacion(value) {
+  const bytes = Utilities.computeDigest(
+    Utilities.DigestAlgorithm.SHA_256,
+    String(value),
+    Utilities.Charset.UTF_8
+  );
+  return bytes.map(byte => (byte < 0 ? byte + 256 : byte).toString(16).padStart(2, "0")).join("");
+}
+
+function ensureOperacionesSheet(ss) {
+  const headers = ["operationId", "creadoEn", "userId", "accion", "tipo", "elementoId", "payloadHash", "estado", "actualizadoEn"];
+  let sheet = ss.getSheetByName(SHEET_OPERACIONES);
+  if (!sheet) {
+    sheet = ss.insertSheet(SHEET_OPERACIONES);
+    sheet.appendRow(headers);
+  } else {
+    const actual = sheet.getRange(1, 1, 1, headers.length).getValues()[0];
+    for (let i = 0; i < headers.length; i++) {
+      if (String(actual[i] || "").trim().toLowerCase() !== headers[i].toLowerCase()) {
+        throw new Error("La hoja Operaciones ya existe con una estructura diferente. No se modificaron datos.");
+      }
+    }
+  }
+  return sheet;
+}
+
+function buscarFilaPorId(sheet, id) {
+  if (!sheet || !id) return null;
+  const data = sheet.getDataRange().getValues();
+  for (let i = 1; i < data.length; i++) {
+    if (String(data[i][0]) === String(id)) return { fila: i + 1, row: data[i] };
+  }
+  return null;
+}
+
+function prepararOperacionCreacion(ss, body, user, accion, tipo, payload, prefijo) {
+  const operationId = normalizarOperationId(body.operationId);
+  if (!operationId) {
+    return { ok: false, error: "Esta versión de la app necesita actualizarse antes de crear o copiar. Recarga la aplicación e intenta de nuevo." };
+  }
+
+  const payloadHash = hashOperacion(JSON.stringify(payload));
+  const elementoId = `${prefijo}_OP_${hashOperacion(operationId).slice(0, 20)}`;
+  const sheet = ensureOperacionesSheet(ss);
+  const data = sheet.getDataRange().getValues();
+  for (let i = 1; i < data.length; i++) {
+    if (String(data[i][0]) !== operationId) continue;
+    const mismoContexto = String(data[i][2]) === String(user.id) &&
+      String(data[i][3]) === accion && String(data[i][4]) === tipo &&
+      String(data[i][5]) === elementoId && String(data[i][6]) === payloadHash;
+    if (!mismoContexto) {
+      return { ok: false, error: "Ese identificador de operación ya fue usado para una acción diferente. Inicia la acción nuevamente." };
+    }
+    return { ok: true, legacy: false, operationId, elementoId, payloadHash, existente: true, fila: i + 1, estado: String(data[i][7] || "") };
+  }
+  return { ok: true, legacy: false, operationId, elementoId, payloadHash, existente: false, sheet };
+}
+
+function iniciarOperacionCreacion(ss, operacion, user, accion, tipo) {
+  if (operacion.legacy || operacion.existente) return operacion;
+  ensureAuditoriaOperationColumn(ensureAuditoriaSheet(ss));
+  const sheet = operacion.sheet || ensureOperacionesSheet(ss);
+  const now = new Date();
+  sheet.appendRow([operacion.operationId, now, user.id, accion, tipo, operacion.elementoId, operacion.payloadHash, "pendiente", now]);
+  operacion.existente = true;
+  operacion.fila = sheet.getLastRow();
+  return operacion;
+}
+
+function completarOperacionCreacion(ss, operacion) {
+  if (operacion.legacy) return;
+  try {
+    const sheet = ensureOperacionesSheet(ss);
+    const data = sheet.getDataRange().getValues();
+    for (let i = 1; i < data.length; i++) {
+      if (String(data[i][0]) !== operacion.operationId) continue;
+      sheet.getRange(i + 1, 8, 1, 2).setValues([["completada", new Date()]]);
+      limpiarOperacionesAntiguas(ss);
+      return;
+    }
+  } catch (err) {}
+}
+
+function limpiarOperacionesAntiguas(ss) {
+  try {
+    const props = PropertiesService.getScriptProperties();
+    const today = Utilities.formatDate(new Date(), Session.getScriptTimeZone(), "yyyy-MM-dd");
+    if (props.getProperty("ultimaLimpiezaOperaciones") === today) return;
+    props.setProperty("ultimaLimpiezaOperaciones", today);
+    const sheet = ss.getSheetByName(SHEET_OPERACIONES);
+    if (!sheet || sheet.getLastRow() < 2) return;
+    const cutoff = Date.now() - OPERATION_RETENTION_DAYS * 24 * 60 * 60 * 1000;
+    const data = sheet.getRange(2, 1, sheet.getLastRow() - 1, 9).getValues();
+    for (let i = data.length - 1; i >= 0; i--) {
+      const createdAt = data[i][1] instanceof Date ? data[i][1].getTime() : new Date(data[i][1]).getTime();
+      if (String(data[i][7]) === "completada" && Number.isFinite(createdAt) && createdAt < cutoff) sheet.deleteRow(i + 2);
+    }
+  } catch (err) {}
+}
+
 // ── Auditoría ────────────────────────────────────────────────
 function ensureAuditoriaSheet(ss) {
   let sheet = ss.getSheetByName(SHEET_AUDITORIA);
   if (!sheet) {
     sheet = ss.insertSheet(SHEET_AUDITORIA);
-    sheet.appendRow(["timestamp","userId","nombre","rol","accion","tipo","elementoId","resumen","antes","despues"]);
+    sheet.appendRow(["timestamp","userId","nombre","rol","accion","tipo","elementoId","resumen","antes","despues","operationId"]);
   }
   return sheet;
 }
 
-function registrarAuditoria(user, accion, tipo, elementoId, resumen, antes, despues) {
+function ensureAuditoriaOperationColumn(sheet) {
+  const header = String(sheet.getRange(1, 11).getValue() || "").trim();
+  if (header && header.toLowerCase() !== "operationid") throw new Error("La columna 11 de Auditoria ya está ocupada.");
+  if (!header) {
+    const filas = Math.max(sheet.getLastRow() - 1, 0);
+    const contieneDatos = filas > 0 && sheet.getRange(2, 11, filas, 1).getValues().some(row => String(row[0] || "").trim());
+    if (contieneDatos) throw new Error("La columna 11 de Auditoria tiene datos sin encabezado. No se modificó la hoja.");
+    sheet.getRange(1, 11).setValue("operationId");
+  }
+}
+
+function auditoriaOperacionExiste(sheet, operationId) {
+  if (!operationId || sheet.getLastRow() < 2) return false;
+  ensureAuditoriaOperationColumn(sheet);
+  const values = sheet.getRange(2, 11, sheet.getLastRow() - 1, 1).getValues();
+  return values.some(row => String(row[0]) === operationId);
+}
+
+function registrarAuditoria(user, accion, tipo, elementoId, resumen, antes, despues, operationId) {
   try {
     const ss = SpreadsheetApp.getActiveSpreadsheet();
     const sheet = ensureAuditoriaSheet(ss);
+    const opId = String(operationId || "");
+    if (opId) ensureAuditoriaOperationColumn(sheet);
     const nombre = getUserNameById(user.id) || user.id;
-    sheet.appendRow([
+    const row = [
       new Date(),
       user.id,
       nombre,
@@ -550,8 +684,24 @@ function registrarAuditoria(user, accion, tipo, elementoId, resumen, antes, desp
       resumen,
       antes ? JSON.stringify(antes) : "",
       despues ? JSON.stringify(despues) : ""
-    ]);
-  } catch (err) {}
+    ];
+    if (opId) row.push(opId);
+    sheet.appendRow(row);
+    return true;
+  } catch (err) {
+    return false;
+  }
+}
+
+function registrarAuditoriaUnaVez(user, accion, tipo, elementoId, resumen, antes, despues, operationId) {
+  if (!operationId) return registrarAuditoria(user, accion, tipo, elementoId, resumen, antes, despues);
+  try {
+    const sheet = ensureAuditoriaSheet(SpreadsheetApp.getActiveSpreadsheet());
+    if (auditoriaOperacionExiste(sheet, operationId)) return true;
+  } catch (err) {
+    return false;
+  }
+  return registrarAuditoria(user, accion, tipo, elementoId, resumen, antes, despues, operationId);
 }
 
 function getAuditoria(body, token) {
@@ -647,7 +797,7 @@ function crearRespaldoManual(token) {
 
     const ss = SpreadsheetApp.getActiveSpreadsheet();
     const timestamp = Utilities.formatDate(new Date(), Session.getScriptTimeZone(), "yyyyMMdd_HHmm");
-    const hojas = [SHEET_RESERVAS, SHEET_BLOQUEOS, SHEET_USUARIOS, SHEET_AUDITORIA];
+    const hojas = [SHEET_RESERVAS, SHEET_BLOQUEOS, SHEET_USUARIOS, SHEET_AUDITORIA, SHEET_OPERACIONES];
     const creadas = [];
     const omitidas = [];
 
@@ -685,7 +835,25 @@ function crearReserva(body, token) {
     const { consultorio, fecha, franja, duracion, nota } = body;
     if (user.rol === "asistente" && !body.targetUserId) return { ok: false, error: "Selecciona profesional" };
     const requestedUserId = (esRolOperativo(user) && body.targetUserId) ? body.targetUserId : user.id;
-    const identidad = resolverUsuarioUnico(SpreadsheetApp.getActiveSpreadsheet(), requestedUserId, { rol: "profesional" });
+    const ss = SpreadsheetApp.getActiveSpreadsheet();
+    const payload = {
+      consultorio: String(consultorio), fecha: fechaToString(fecha), franja: Number(franja),
+      duracion: Number(duracion), nota: String(nota || ""), targetUserId: String(requestedUserId), tipo: String(body.tipo || "normal")
+    };
+    const operacion = prepararOperacionCreacion(ss, body, user, "crearReserva", "reserva", payload, "R");
+    if (!operacion.ok) return operacion;
+    const sheet = ss.getSheetByName(SHEET_RESERVAS);
+    const yaCreada = buscarFilaPorId(sheet, operacion.elementoId);
+    if (yaCreada) {
+      if (!esRolOperativo(user) && String(yaCreada.row[2]) !== user.id) return { ok: false, error: "Sin permiso" };
+      const despuesExistente = reservaAuditFromRow(yaCreada.row);
+      registrarAuditoriaUnaVez(user, "crear", "reserva", operacion.elementoId, `creó reserva de ${resumenReservaAudit(despuesExistente)}`, null, despuesExistente, operacion.operationId);
+      completarOperacionCreacion(ss, operacion);
+      invalidateAgendaCache();
+      return { ok: true, id: operacion.elementoId, idempotent: true };
+    }
+
+    const identidad = resolverUsuarioUnico(ss, requestedUserId, { rol: "profesional" });
     if (!identidad.ok) return identidad;
     const userId = identidad.usuario.id;
 
@@ -693,12 +861,13 @@ function crearReserva(body, token) {
     if (hayConflicto(consultorio, fecha, franja, duracion, null)) return { ok: false, error: "Conflicto de horario" };
 
     const consultorioNombre = NOMBRES_CONSULTORIOS[Number(consultorio)] || String(consultorio);
-    const sheet = SpreadsheetApp.getActiveSpreadsheet().getSheetByName(SHEET_RESERVAS);
-    const id = "R_" + Date.now();
+    iniciarOperacionCreacion(ss, operacion, user, "crearReserva", "reserva");
+    const id = operacion.elementoId;
     const row = [id, consultorioNombre, userId, fecha, franja, duracion, nota || "", true, body.tipo || "normal", "confirmada"];
     sheet.appendRow(row);
     const despues = reservaAuditFromRow(row);
-    registrarAuditoria(user, "crear", "reserva", id, `creó reserva de ${resumenReservaAudit(despues)}`, null, despues);
+    registrarAuditoriaUnaVez(user, "crear", "reserva", id, `creó reserva de ${resumenReservaAudit(despues)}`, null, despues, operacion.operationId);
+    completarOperacionCreacion(ss, operacion);
     invalidateAgendaCache();
     return { ok: true, id };
   });
@@ -799,24 +968,43 @@ function moverReserva(body, token) {
 function copiarReserva(body, token) {
   return withWriteLock(function() {
     const user = getUserFromToken(token);
-    const sheet = SpreadsheetApp.getActiveSpreadsheet().getSheetByName(SHEET_RESERVAS);
+    const ss = SpreadsheetApp.getActiveSpreadsheet();
+    const sheet = ss.getSheetByName(SHEET_RESERVAS);
     const data = sheet.getDataRange().getValues();
+    const payload = {
+      sourceId: String(body.id || ""), consultorio: String(body.consultorio),
+      fecha: fechaToString(body.fecha), franja: Number(body.franja)
+    };
+    const operacion = prepararOperacionCreacion(ss, body, user, "copiarReserva", "reserva", payload, "R");
+    if (!operacion.ok) return operacion;
+    const yaCreada = buscarFilaPorId(sheet, operacion.elementoId);
+    if (yaCreada) {
+      if (!esRolOperativo(user) && String(yaCreada.row[2]) !== user.id) return { ok: false, error: "Sin permiso" };
+      const source = data.find(row => String(row[0]) === String(body.id));
+      const despuesExistente = reservaAuditFromRow(yaCreada.row);
+      registrarAuditoriaUnaVez(user, "crear", "reserva", operacion.elementoId, `copió reserva de ${resumenReservaAudit(despuesExistente)}`, source ? reservaAuditFromRow(source) : null, despuesExistente, operacion.operationId);
+      completarOperacionCreacion(ss, operacion);
+      invalidateAgendaCache();
+      return { ok: true, id: operacion.elementoId, idempotent: true };
+    }
 
     for (let i = 1; i < data.length; i++) {
       if (String(data[i][0]) !== String(body.id)) continue;
       const [, , userId, , , duracion, nota, , tipo] = data[i];
       if (!esRolOperativo(user) && user.id !== String(userId)) return { ok: false, error: "Sin permiso" };
-      const identidad = resolverUsuarioUnico(SpreadsheetApp.getActiveSpreadsheet(), userId, { rol: "profesional" });
+      const identidad = resolverUsuarioUnico(ss, userId, { rol: "profesional" });
       if (!identidad.ok) return { ok: false, error: `No se puede copiar esta reserva: ${identidad.error}` };
       const targetUserId = identidad.usuario.id;
       if (estaBloquado(body.consultorio, body.fecha, body.franja, duracion)) return { ok: false, error: "Franja bloqueada" };
       if (hayConflicto(body.consultorio, body.fecha, body.franja, duracion, null)) return { ok: false, error: "Conflicto de horario" };
       const consultorioNombre = NOMBRES_CONSULTORIOS[Number(body.consultorio)] || String(body.consultorio);
-      const newId = "R_" + Date.now();
+      iniciarOperacionCreacion(ss, operacion, user, "copiarReserva", "reserva");
+      const newId = operacion.elementoId;
       const row = [newId, consultorioNombre, targetUserId, body.fecha, body.franja, duracion, nota || "", true, tipo || "normal", "confirmada"];
       sheet.appendRow(row);
       const despues = reservaAuditFromRow(row);
-      registrarAuditoria(user, "crear", "reserva", newId, `copió reserva de ${resumenReservaAudit(despues)}`, reservaAuditFromRow(data[i]), despues);
+      registrarAuditoriaUnaVez(user, "crear", "reserva", newId, `copió reserva de ${resumenReservaAudit(despues)}`, reservaAuditFromRow(data[i]), despues, operacion.operationId);
+      completarOperacionCreacion(ss, operacion);
       invalidateAgendaCache();
       return { ok: true, id: newId };
     }
@@ -930,11 +1118,34 @@ function crearBloqueo(body, token) {
     const sheet = ensureBloqueosSheet(ss);
     const consultorioVal = body.consultorio === "todos" ? "todos"
       : (NOMBRES_CONSULTORIOS[Number(body.consultorio)] || String(body.consultorio));
-    const id = "B_" + Date.now();
+    const esCopia = String(body.operationKind || "") === "copiar";
+    const accionOperacion = esCopia ? "copiarBloqueo" : "crearBloqueo";
+    const payload = {
+      sourceId: esCopia ? String(body.sourceId || "") : "",
+      consultorio: String(consultorioVal), fecha: fechaToString(body.fecha), franja: Number(body.franja),
+      duracion: Number(body.duracion), nota: String(body.nota || ""), repeticion: String(body.repeticion || "ninguna")
+    };
+    const operacion = prepararOperacionCreacion(ss, body, user, accionOperacion, "bloqueo", payload, "B");
+    if (!operacion.ok) return operacion;
+    const yaCreado = buscarFilaPorId(sheet, operacion.elementoId);
+    if (yaCreado) {
+      const despuesExistente = bloqueoAuditFromRow(yaCreado.row);
+      const resumen = esCopia ? `copió bloqueo · ${resumenBloqueoAudit(despuesExistente)}` : `creó bloqueo · ${resumenBloqueoAudit(despuesExistente)}`;
+      registrarAuditoriaUnaVez(user, "crear", "bloqueo", operacion.elementoId, resumen, null, despuesExistente, operacion.operationId);
+      completarOperacionCreacion(ss, operacion);
+      invalidateAgendaCache();
+      return { ok: true, id: operacion.elementoId, idempotent: true };
+    }
+    if (esCopia && !buscarFilaPorId(sheet, body.sourceId)) return { ok: false, error: "El bloqueo original ya no está disponible. Cópialo nuevamente." };
+
+    iniciarOperacionCreacion(ss, operacion, user, accionOperacion, "bloqueo");
+    const id = operacion.elementoId;
     const row = [id, consultorioVal, body.franja, body.fecha, body.duracion, body.nota || "", true, body.repeticion || "ninguna"];
     sheet.appendRow(row);
     const despues = bloqueoAuditFromRow(row);
-    registrarAuditoria(user, "crear", "bloqueo", id, `creó bloqueo · ${resumenBloqueoAudit(despues)}`, null, despues);
+    const resumen = esCopia ? `copió bloqueo · ${resumenBloqueoAudit(despues)}` : `creó bloqueo · ${resumenBloqueoAudit(despues)}`;
+    registrarAuditoriaUnaVez(user, "crear", "bloqueo", id, resumen, null, despues, operacion.operationId);
+    completarOperacionCreacion(ss, operacion);
     invalidateAgendaCache();
     return { ok: true, id };
   });

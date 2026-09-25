@@ -200,6 +200,10 @@ function getWeekDates(base){
 }
 function fmt(d){return `${String(d.getDate()).padStart(2,"0")}/${String(d.getMonth()+1).padStart(2,"0")}`;}
 function dateKey(d){return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,"0")}-${String(d.getDate()).padStart(2,"0")}`;}
+function createOperationId(){
+  if(window.crypto?.randomUUID)return `op_${window.crypto.randomUUID()}`;
+  return `op_${Date.now()}_${Math.random().toString(36).slice(2)}_${Math.random().toString(36).slice(2)}`;
+}
 async function api(params,{timeoutMs=0,signal=null}={}){
   const action=String(params.action||"solicitud");
   const startedAt=performance.now();
@@ -282,6 +286,7 @@ function App(){
   const [loginForm,setLoginForm]=useState({userId:"",password:""});
   const [dragItem,setDragItem]=useState(null); // {type:"reserva"|"bloqueo", id}
   const [clipboard,setClipboard]=useState(null); // {type:"reserva"|"bloqueo", item}
+  const [retryOperation,setRetryOperation]=useState(null);
   const [isMobile,setIsMobile]=useState(()=>window.innerWidth<=720);
   const [mobileDia,setMobileDia]=useState(()=>Math.min(Math.max((new Date().getDay()||1)-1,0),5));
   const pollRef=useRef(null);
@@ -301,6 +306,7 @@ function App(){
   const [syncingById,setSyncingById]=useState({});
   const pasteInFlightRef=useRef(false);
   const formActionInFlightRef=useRef(false);
+  const creationRetryInFlightRef=useRef(false);
   const usuarioActionInFlightRef=useRef(false);
 
   useEffect(()=>{
@@ -380,7 +386,7 @@ function App(){
     try{sessionStorage.setItem(TODAS_FILTROS_KEY,JSON.stringify(todasFiltros));}catch{}
   },[todasFiltros]);
 
-  const hasPendingWrites=()=>pendingMoveIdsRef.current.size>0||formActionInFlightRef.current||pasteInFlightRef.current;
+  const hasPendingWrites=()=>pendingMoveIdsRef.current.size>0||formActionInFlightRef.current||pasteInFlightRef.current||creationRetryInFlightRef.current;
   const mergePendingItems=(current,incoming,resolvedId)=>{
     const resolvedKey=String(resolvedId||"");
     const currentById=new Map(current.map(item=>[String(item.id),item]));
@@ -404,6 +410,8 @@ function App(){
     agendaVersionRef.current={key:null,version:null};
     setReservas([]);
     setBloqueos([]);
+    setClipboard(null);
+    setRetryOperation(null);
     setCurrentUser(null);
     setToken(null);
     setInitialLoad({status:"idle",message:""});
@@ -682,8 +690,38 @@ function App(){
     });
   };
 
+  const hasUnresolvedCreation=()=>{
+    if(!retryOperation)return false;
+    setError("Hay una creación pendiente de confirmar. Usa Reintentar antes de iniciar otra.");
+    return true;
+  };
+
+  const handleRetryOperation=async()=>{
+    if(!retryOperation||creationRetryInFlightRef.current)return;
+    creationRetryInFlightRef.current=true;setLoading(true);setError(null);
+    try{
+      const d=await api({...retryOperation.params,token,operationId:retryOperation.operationId});
+      if(d.ok){
+        const successMessage=retryOperation.successMessage;
+        setRetryOperation(null);
+        await fetchAll(token,true);
+        showToast(successMessage);
+      }else{
+        setRetryOperation(null);
+        setError(d.error||"La operación no pudo completarse.");
+        await fetchAll(token,true);
+      }
+    }catch(err){
+      setError(`${requestErrorMessage(err,"confirmar la operación")} Puedes volver a intentar con seguridad.`);
+      await fetchAll(token,true);
+    }finally{
+      creationRetryInFlightRef.current=false;setLoading(false);
+    }
+  };
+
   // CRUD reservas
   const handleSave=async()=>{
+    if(hasUnresolvedCreation())return;
     if(formActionInFlightRef.current)return;
     const fi=Number(form.franjaInicio),ff=Number(form.franjaFin);
     if(ff<=fi){setConflict(true);return;}
@@ -692,16 +730,18 @@ function App(){
     formActionInFlightRef.current=true;
     setLoading(true);
     const targetUserId=(canCreateForOthers&&form.profesionalId)?form.profesionalId:currentUser.id;
-    const tempId="temp_"+Date.now();
+    const operationId=createOperationId();
+    const tempId="temp_"+operationId;
+    const params={action:"crearReserva",consultorio:modal.consultorio,fecha:modal.fecha,franja:fi,duracion:dur,nota:form.nota,targetUserId};
     const nueva={id:tempId,consultorio:modal.consultorio,userId:targetUserId,fecha:modal.fecha,franja:fi,duracion:dur,nota:form.nota,tipo:"normal",estado:"confirmada"};
     markLocalChange();
     setReservas(prev=>[...prev,nueva]);
     setModal(null);showToast("Reserva creada");
     try{
-      const d=await api({action:"crearReserva",token,consultorio:modal.consultorio,fecha:modal.fecha,franja:fi,duracion:dur,nota:form.nota,targetUserId});
-      if(d.ok){setReservas(prev=>prev.map(r=>r.id===tempId?{...r,id:d.id}:r));await fetchAll(token,true);}
-      else{setError(d.error||"No se pudo guardar la reserva.");setReservas(prev=>prev.filter(r=>r.id!==tempId));await fetchAll(token,true);}
-    }catch{setError("No se pudo confirmar el guardado. La agenda se actualizó.");setReservas(prev=>prev.filter(r=>r.id!==tempId));await fetchAll(token,true);}
+      const d=await api({...params,token,operationId});
+      if(d.ok){setReservas(prev=>normalizeReservas(prev.map(r=>r.id===tempId?{...r,id:d.id}:r)));setRetryOperation(null);await fetchAll(token,true);}
+      else{if(d.retryable){setRetryOperation({operationId,params,successMessage:"Reserva confirmada"});setError("El servidor no pudo confirmar el resultado. Puedes reintentar sin duplicar la reserva.");}else setError(d.error||"No se pudo guardar la reserva.");setReservas(prev=>prev.filter(r=>r.id!==tempId));await fetchAll(token,true);}
+    }catch{setRetryOperation({operationId,params,successMessage:"Reserva confirmada"});setError("No se recibió la confirmación del servidor. Puedes reintentar sin duplicar la reserva.");setReservas(prev=>prev.filter(r=>r.id!==tempId));await fetchAll(token,true);}
     finally{formActionInFlightRef.current=false;setLoading(false);}
   };
   const handleUpdate=async()=>{
@@ -833,42 +873,48 @@ function App(){
   };
   const handlePaste=async(cons,fecha,fi)=>{
     if(!clipboard)return;
+    if(hasUnresolvedCreation())return;
     if(pasteInFlightRef.current)return;
     if(isSyncing(clipboard.item?.id)){setClipboard(null);setError("El elemento copiado aún se estaba sincronizando. Intenta copiarlo de nuevo.");fetchAll(token);return;}
     pasteInFlightRef.current=true;
     setLoading(true);
+    const operationId=createOperationId();
+    const copied=clipboard;
+    const params=copied.type==="reserva"
+      ?{action:"copiarReserva",id:copied.item.id,consultorio:cons,fecha,franja:fi}
+      :{action:"crearBloqueo",consultorio:cons,fecha,franja:fi,duracion:copied.item.duracion,nota:copied.item.nota,repeticion:copied.item.repeticion,operationKind:"copiar",sourceId:copied.item.id};
+    const successMessage=copied.type==="reserva"?"Reserva pegada":"Bloqueo pegado";
     try{
-      if(clipboard.type==="reserva"){
-        const d=await api({action:"copiarReserva",token,id:clipboard.item.id,consultorio:cons,fecha,franja:fi});
-        if(d.ok){await fetchAll(token,true);setClipboard(null);showToast("Reserva pegada");}else setError(d.error);
-      } else {
-        const b=clipboard.item;
-        const d=await api({action:"crearBloqueo",token,consultorio:cons,fecha,franja:fi,duracion:b.duracion,nota:b.nota,repeticion:b.repeticion});
-        if(d.ok){await fetchAll(token,true);setClipboard(null);showToast("Bloqueo pegado");}else setError(d.error);
-      }
-    }catch{setError("Error al pegar.");}
+      const d=await api({...params,token,operationId});
+      if(d.ok){setRetryOperation(null);await fetchAll(token,true);setClipboard(null);showToast(successMessage);}
+      else if(d.retryable){setClipboard(null);setRetryOperation({operationId,params,successMessage});setError("El servidor no pudo confirmar el pegado. Puedes reintentar sin duplicarlo.");await fetchAll(token,true);}
+      else setError(d.error||"No se pudo pegar el elemento.");
+    }catch{setClipboard(null);setRetryOperation({operationId,params,successMessage});setError("No se recibió la confirmación del servidor. Puedes reintentar el pegado sin duplicarlo.");await fetchAll(token,true);}
     finally{pasteInFlightRef.current=false;setLoading(false);}
   };
 
   // Bloqueos
   const handleCrearBloqueo=async()=>{
+    if(hasUnresolvedCreation())return;
     if(formActionInFlightRef.current)return;
     const fi=Number(bForm.franjaInicio),ff=Number(bForm.franjaFin);
     if(ff<=fi)return;
     formActionInFlightRef.current=true;
     setLoading(true);
     const dur=(ff-fi)*30;
-    const tempId="temp_b_"+Date.now();
+    const operationId=createOperationId();
+    const tempId="temp_b_"+operationId;
+    const params={action:"crearBloqueo",consultorio:bForm.consultorio,fecha:bloqueoModal.fecha,franja:fi,duracion:dur,nota:bForm.nota,repeticion:bForm.repeticion};
     const nuevo={id:tempId,consultorio:bForm.consultorio==="todos"?"todos":Number(bForm.consultorio),fecha:bloqueoModal.fecha,franja:fi,duracion:dur,nota:bForm.nota,repeticion:bForm.repeticion};
     markLocalChange();
     setBloqueos(prev=>[...prev,nuevo]);
     setBloqueoModal(null);
     showToast("Bloqueo creado");
     try{
-      const d=await api({action:"crearBloqueo",token,consultorio:bForm.consultorio,fecha:bloqueoModal.fecha,franja:fi,duracion:dur,nota:bForm.nota,repeticion:bForm.repeticion});
-      if(d.ok){setBloqueos(prev=>prev.map(b=>b.id===tempId?{...b,id:d.id}:b));await fetchAll(token,true);}
-      else{setBloqueos(prev=>prev.filter(b=>b.id!==tempId));setError(d.error);await fetchAll(token,true);}
-    }catch{setBloqueos(prev=>prev.filter(b=>b.id!==tempId));setError("No se pudo crear el bloqueo.");await fetchAll(token,true);}
+      const d=await api({...params,token,operationId});
+      if(d.ok){setBloqueos(prev=>normalizeBloqueos(prev.map(b=>b.id===tempId?{...b,id:d.id}:b)));setRetryOperation(null);await fetchAll(token,true);}
+      else{if(d.retryable){setRetryOperation({operationId,params,successMessage:"Bloqueo confirmado"});setError("El servidor no pudo confirmar el resultado. Puedes reintentar sin duplicar el bloqueo.");}else setError(d.error||"No se pudo crear el bloqueo.");setBloqueos(prev=>prev.filter(b=>b.id!==tempId));await fetchAll(token,true);}
+    }catch{setRetryOperation({operationId,params,successMessage:"Bloqueo confirmado"});setBloqueos(prev=>prev.filter(b=>b.id!==tempId));setError("No se recibió la confirmación del servidor. Puedes reintentar sin duplicar el bloqueo.");await fetchAll(token,true);}
     finally{formActionInFlightRef.current=false;setLoading(false);}
   };
   const handleEliminarBloqueo=async(id)=>{
@@ -1316,6 +1362,12 @@ function App(){
       </div>
 
       {error&&<div className="notice notice-danger"><span>{error}</span><button onClick={()=>setError(null)} style={{fontSize:11,padding:"4px 8px"}}>✕</button></div>}
+      {retryOperation&&<div className="notice notice-info">
+        <span>Hay una creación pendiente de confirmar. Reintentar reutiliza la misma operación y no crea duplicados.</span>
+        <div className="toolbar-actions">
+          <button onClick={handleRetryOperation} disabled={loading} style={{fontSize:11,background:"var(--navy)",color:"#fff",border:"none"}}>{loading?"Confirmando...":"Reintentar"}</button>
+        </div>
+      </div>}
 
       {/* ── CONSOLIDADA ── */}
       {view==="consolidada"&&(
