@@ -7,6 +7,8 @@ const SHEET_USUARIOS = "Usuarios";
 const SHEET_BLOQUEOS = "Bloqueos";
 const SHEET_AUDITORIA = "Auditoria";
 const NOMBRES_CONSULTORIOS = ["Consultorio 1","Consultorio 2","Consultorio 3","Consultorio 4"];
+const ROLES_USUARIO = ["admin", "socio", "asistente", "profesional"];
+const USER_HEADERS = ["id", "nombre", "rol", "contraseña", "correo", "activo"];
 const CACHE_AGENDA_PREFIX = "agenda_v1_";
 const PERFORMANCE_METRICS_ENABLED = true; // Temporal: desactivar tras cerrar el diagnóstico.
 
@@ -46,6 +48,9 @@ function handle(e) {
       case "eliminarBloqueo":        return resp(eliminarBloqueo(merged, token));
       case "getBloqueos":            return respMedida(getBloqueos(), action, startedAt);
       case "getAuditoria":           return respMedida(getAuditoria(merged, token), action, startedAt);
+      case "getUsuariosAdmin":       return respMedida(getUsuariosAdmin(token), action, startedAt);
+      case "crearUsuario":           return resp(crearUsuario(merged, token));
+      case "editarUsuario":          return resp(editarUsuario(merged, token));
       case "crearRespaldoManual":    return resp(crearRespaldoManual(token));
       case "generarPreestablecidas": return resp(generarPreestablecidas(merged, token));
       case "diagnosticarDatos":      return resp(diagnosticarDatos(token));
@@ -68,36 +73,21 @@ function respMedida(data, action, startedAt) {
 
 // ── Autenticación ────────────────────────────────────────────
 function login(body) {
-  const sheet = SpreadsheetApp.getActiveSpreadsheet().getSheetByName(SHEET_USUARIOS);
-  const data = sheet.getDataRange().getValues();
-  const users = [];
-  const seenUserIds = {};
-  const duplicateUserIds = {};
-  let matchedUser = null;
+  const registro = leerRegistroUsuarios(SpreadsheetApp.getActiveSpreadsheet());
   const requestedId = String(body.userId || "").trim();
-  const requestedKey = requestedId.toLowerCase();
-
-  for (let i = 1; i < data.length; i++) {
-    const [id, nombre, rol, pass] = data[i];
-    if (!id) continue;
-    const cleanId = String(id).trim();
-    const idKey = cleanId.toLowerCase();
-    const cleanUser = { id: cleanId, nombre: String(nombre).trim(), rol: String(rol).trim().toLowerCase() };
-    if (seenUserIds[idKey]) duplicateUserIds[idKey] = true;
-    else {
-      seenUserIds[idKey] = true;
-      users.push(cleanUser);
-    }
-    if (cleanId === requestedId &&
-        String(pass).trim() === String(body.password).trim()) {
-      matchedUser = cleanUser;
-    }
-  }
-
-  if (duplicateUserIds[requestedKey]) {
+  const requestedKey = normalizarUserId(requestedId);
+  const coincidencias = registro.porId[requestedKey] || [];
+  if (coincidencias.length > 1) {
     return { ok: false, error: `El ID "${requestedId}" está repetido en Usuarios. Solicita al administrador corregirlo antes de ingresar.` };
   }
+  const matched = coincidencias.length === 1 && coincidencias[0].id === requestedId &&
+    String(coincidencias[0].password).trim() === String(body.password || "").trim() ? coincidencias[0] : null;
+  if (matched && !matched.activo) return { ok: false, error: "Esta cuenta está desactivada. Consulta con administración." };
+  const matchedUser = matched ? usuarioPublico(matched) : null;
   if (matchedUser) {
+    const users = registro.usuarios
+      .filter(u => u.activo && (registro.porId[u.idKey] || []).length === 1)
+      .map(usuarioPublico);
     const token = Utilities.base64Encode(`${matchedUser.id}:${matchedUser.rol}:${new Date().toDateString()}`);
     return { ok: true, user: matchedUser, token, users };
   }
@@ -143,13 +133,205 @@ function puedeEliminarReservaCancelada(user) {
 }
 
 function getUserNameById(userId) {
-  const sheet = SpreadsheetApp.getActiveSpreadsheet().getSheetByName(SHEET_USUARIOS);
-  if (!sheet) return String(userId || "");
-  const data = sheet.getDataRange().getValues();
-  for (let i = 1; i < data.length; i++) {
-    if (String(data[i][0]) === String(userId)) return String(data[i][1] || userId);
-  }
+  const registro = leerRegistroUsuarios(SpreadsheetApp.getActiveSpreadsheet());
+  const matches = registro.porId[normalizarUserId(userId)] || [];
+  if (matches.length === 1) return matches[0].nombre || matches[0].id;
   return String(userId || "");
+}
+
+function normalizarUserId(value) {
+  return String(value || "").trim().toLowerCase();
+}
+
+function normalizarCorreo(value) {
+  return String(value || "").trim().toLowerCase();
+}
+
+function normalizarNombre(value) {
+  return String(value || "").trim().toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "").replace(/\s+/g, " ");
+}
+
+function usuarioEstaActivo(value) {
+  if (value === "" || value === null || typeof value === "undefined") return true;
+  return value !== false && !["false", "inactivo", "no", "0"].includes(String(value).trim().toLowerCase());
+}
+
+function usuarioPublico(usuario) {
+  return { id: usuario.id, nombre: usuario.nombre, rol: usuario.rol };
+}
+
+function leerRegistroUsuarios(ss) {
+  const sheet = ss.getSheetByName(SHEET_USUARIOS);
+  const result = { sheet, usuarios: [], porId: {}, porCorreo: {}, porNombre: {} };
+  if (!sheet) return result;
+  const data = sheet.getDataRange().getValues();
+  const headers = (data[0] || []).map(value => String(value || "").trim().toLowerCase());
+  const tieneCorreo = ["correo", "email"].includes(headers[4]);
+  const tieneActivo = ["activo", "activa"].includes(headers[5]);
+  for (let i = 1; i < data.length; i++) {
+    const row = data[i];
+    if (!row.some(value => String(value || "").trim())) continue;
+    const usuario = {
+      fila: i + 1,
+      id: String(row[0] || "").trim(),
+      nombre: String(row[1] || "").trim(),
+      rol: String(row[2] || "").trim().toLowerCase(),
+      password: String(row[3] || ""),
+      correo: tieneCorreo ? String(row[4] || "").trim() : "",
+      activo: tieneActivo ? usuarioEstaActivo(row[5]) : true
+    };
+    usuario.idKey = normalizarUserId(usuario.id);
+    usuario.nombreKey = normalizarNombre(usuario.nombre);
+    usuario.correoKey = normalizarCorreo(usuario.correo);
+    result.usuarios.push(usuario);
+    if (usuario.idKey) {
+      if (!result.porId[usuario.idKey]) result.porId[usuario.idKey] = [];
+      result.porId[usuario.idKey].push(usuario);
+    }
+    if (usuario.nombreKey) {
+      if (!result.porNombre[usuario.nombreKey]) result.porNombre[usuario.nombreKey] = [];
+      result.porNombre[usuario.nombreKey].push(usuario);
+    }
+    if (usuario.correoKey) {
+      if (!result.porCorreo[usuario.correoKey]) result.porCorreo[usuario.correoKey] = [];
+      result.porCorreo[usuario.correoKey].push(usuario);
+    }
+  }
+  return result;
+}
+
+function resolverUsuarioUnico(ss, userId, opciones) {
+  const opts = opciones || {};
+  const registro = leerRegistroUsuarios(ss);
+  const matches = registro.porId[normalizarUserId(userId)] || [];
+  if (!String(userId || "").trim()) return { ok: false, error: "Selecciona un profesional" };
+  if (matches.length === 0) return { ok: false, error: `El profesional con ID "${userId}" no existe. Actualiza la agenda y vuelve a intentarlo.` };
+  if (matches.length > 1) return { ok: false, error: `El ID "${userId}" está repetido. Corrígelo en Usuarios antes de continuar.` };
+  const usuario = matches[0];
+  if (opts.activo !== false && !usuario.activo) return { ok: false, error: `${usuario.nombre || usuario.id} está desactivado.` };
+  if (opts.rol && usuario.rol !== opts.rol) return { ok: false, error: `${usuario.nombre || usuario.id} no tiene rol profesional.` };
+  return { ok: true, usuario, registro };
+}
+
+function ensureUsuariosExtendedSchema(sheet) {
+  const header = sheet.getRange(1, 1, 1, Math.max(sheet.getLastColumn(), 6)).getValues()[0];
+  const aliases = [
+    ["id", "userid", "usuario"],
+    ["nombre"],
+    ["rol"],
+    ["contraseña", "password", "clave"],
+    ["correo", "email"],
+    ["activo", "activa"]
+  ];
+  for (let i = 0; i < USER_HEADERS.length; i++) {
+    const actual = String(header[i] || "").trim().toLowerCase();
+    if (actual && !aliases[i].includes(actual)) throw new Error(`La columna ${i + 1} de Usuarios contiene "${header[i]}". No se modificó la hoja.`);
+    if (!actual) {
+      const filas = Math.max(sheet.getLastRow() - 1, 0);
+      const contieneDatos = filas > 0 && sheet.getRange(2, i + 1, filas, 1).getValues().some(row => String(row[0] || "").trim());
+      if (contieneDatos) throw new Error(`La columna ${i + 1} de Usuarios tiene datos sin encabezado. No se modificó la hoja.`);
+      sheet.getRange(1, i + 1).setValue(USER_HEADERS[i]);
+    }
+  }
+}
+
+function usuarioAudit(usuario) {
+  return usuario ? { id: usuario.id, nombre: usuario.nombre, rol: usuario.rol, activo: usuario.activo } : null;
+}
+
+function getUsuariosAdmin(token) {
+  const actor = getUserFromToken(token);
+  if (actor.rol !== "admin") return { ok: false, error: "Solo admin" };
+  const registro = leerRegistroUsuarios(SpreadsheetApp.getActiveSpreadsheet());
+  return {
+    ok: true,
+    usuarios: registro.usuarios.map(u => ({
+      ...usuarioAudit(u),
+      correo: u.correo || "",
+      fila: u.fila,
+      idDuplicado: (registro.porId[u.idKey] || []).length > 1,
+      nombreRepetido: (registro.porNombre[u.nombreKey] || []).length > 1
+    }))
+  };
+}
+
+function validarDatosUsuario(body, creando) {
+  const id = String(body.id || "").trim();
+  const nombre = String(body.nombre || "").trim();
+  const rol = String(body.rol || "").trim().toLowerCase();
+  const correo = String(body.correo || "").trim();
+  const password = String(body.password || "");
+  if (!id) return { ok: false, error: "El ID es obligatorio." };
+  if (!/^[A-Za-z0-9._-]{3,60}$/.test(id)) return { ok: false, error: "El ID debe tener entre 3 y 60 caracteres y usar solo letras, números, punto, guion o guion bajo." };
+  if (!nombre) return { ok: false, error: "El nombre es obligatorio." };
+  if (!ROLES_USUARIO.includes(rol)) return { ok: false, error: "El rol no es válido." };
+  if (correo && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(correo)) return { ok: false, error: "El correo no es válido." };
+  if (creando && !password.trim()) return { ok: false, error: "La contraseña es obligatoria para un usuario nuevo." };
+  return { ok: true, datos: { id, nombre, rol, correo, password, activo: usuarioEstaActivo(body.activo) } };
+}
+
+function crearUsuario(body, token) {
+  return withWriteLock(function() {
+    const actor = getUserFromToken(token);
+    if (actor.rol !== "admin") return { ok: false, error: "Solo admin" };
+    const validacion = validarDatosUsuario(body, true);
+    if (!validacion.ok) return validacion;
+    const ss = SpreadsheetApp.getActiveSpreadsheet();
+    const registro = leerRegistroUsuarios(ss);
+    if (!registro.sheet) return { ok: false, error: "No existe hoja de usuarios" };
+    const datos = validacion.datos;
+    const existentes = registro.porId[normalizarUserId(datos.id)] || [];
+    if (existentes.length === 1) {
+      const existente = existentes[0];
+      const mismoUsuario = existente.id === datos.id && existente.nombre === datos.nombre && existente.rol === datos.rol &&
+        existente.correo === datos.correo && existente.activo === datos.activo && existente.password === datos.password;
+      if (mismoUsuario) return { ok: true, idempotent: true, usuario: usuarioAudit(existente) };
+    }
+    if (existentes.length) return { ok: false, error: `El ID "${datos.id}" ya existe. Usa un ID diferente.` };
+    if (datos.correo && (registro.porCorreo[normalizarCorreo(datos.correo)] || []).length) return { ok: false, error: `El correo "${datos.correo}" ya está registrado.` };
+    ensureUsuariosExtendedSchema(registro.sheet);
+    registro.sheet.appendRow([datos.id, datos.nombre, datos.rol, datos.password, datos.correo, datos.activo]);
+    const despues = usuarioAudit(datos);
+    registrarAuditoria(actor, "crear", "usuario", datos.id, `creó usuario ${datos.nombre} · ID ${datos.id} · rol ${datos.rol}`, null, despues);
+    return { ok: true, usuario: despues, avisoNombre: (registro.porNombre[normalizarNombre(datos.nombre)] || []).length ? "Ya existe otro usuario con el mismo nombre. Sus IDs los mantienen separados." : "" };
+  });
+}
+
+function editarUsuario(body, token) {
+  return withWriteLock(function() {
+    const actor = getUserFromToken(token);
+    if (actor.rol !== "admin") return { ok: false, error: "Solo admin" };
+    const validacion = validarDatosUsuario(body, false);
+    if (!validacion.ok) return validacion;
+    const ss = SpreadsheetApp.getActiveSpreadsheet();
+    const registro = leerRegistroUsuarios(ss);
+    const matches = registro.porId[normalizarUserId(validacion.datos.id)] || [];
+    if (matches.length !== 1) return { ok: false, error: matches.length ? "El ID está repetido; corrígelo manualmente antes de editar." : "Usuario no encontrado." };
+    const actual = matches[0];
+    const datos = validacion.datos;
+    datos.id = actual.id;
+    if (typeof body.activo === "undefined" || body.activo === "") datos.activo = actual.activo;
+    if (actual.id === actor.id && (datos.rol !== actual.rol || datos.activo !== actual.activo)) return { ok: false, error: "No puedes cambiar tu propio rol ni desactivar tu cuenta desde la app." };
+    const correoMatches = datos.correo ? (registro.porCorreo[normalizarCorreo(datos.correo)] || []).filter(u => u.fila !== actual.fila) : [];
+    if (correoMatches.length) return { ok: false, error: `El correo "${datos.correo}" ya está registrado.` };
+    const despues = { ...actual, nombre: datos.nombre, rol: datos.rol, correo: datos.correo, activo: datos.activo };
+    const passwordCambia = datos.password.trim() && actual.password !== datos.password;
+    const sinCambios = actual.nombre === despues.nombre && actual.rol === despues.rol && actual.correo === despues.correo && actual.activo === despues.activo && !passwordCambia;
+    if (sinCambios) return { ok: true, idempotent: true, usuario: usuarioAudit(actual) };
+    ensureUsuariosExtendedSchema(registro.sheet);
+    registro.sheet.getRange(actual.fila, 2, 1, 2).setValues([[datos.nombre, datos.rol]]);
+    if (passwordCambia) registro.sheet.getRange(actual.fila, 4).setValue(datos.password);
+    registro.sheet.getRange(actual.fila, 5, 1, 2).setValues([[datos.correo, datos.activo]]);
+    const cambios = [];
+    if (actual.nombre !== despues.nombre) cambios.push(`nombre: ${actual.nombre} → ${despues.nombre}`);
+    if (actual.rol !== despues.rol) cambios.push(`rol: ${actual.rol} → ${despues.rol}`);
+    if (actual.activo !== despues.activo) cambios.push(despues.activo ? "activó la cuenta" : "desactivó la cuenta");
+    if (actual.correo !== despues.correo) cambios.push("actualizó el correo");
+    if (passwordCambia) cambios.push("actualizó la contraseña");
+    const accion = actual.activo !== despues.activo ? (despues.activo ? "activar" : "desactivar") : "editar";
+    registrarAuditoria(actor, accion, "usuario", actual.id, `actualizó usuario ${despues.nombre} · ID ${actual.id} · ${cambios.join(" · ")}`, usuarioAudit(actual), usuarioAudit(despues));
+    return { ok: true, usuario: usuarioAudit(despues), avisoNombre: (registro.porNombre[normalizarNombre(datos.nombre)] || []).filter(u => u.fila !== actual.fila).length ? "Ya existe otro usuario con el mismo nombre. Sus IDs los mantienen separados." : "" };
+  });
 }
 
 // ── Migración de franjas horarias (ejecutar UNA sola vez) ────
@@ -268,13 +450,11 @@ function getReporteReservas(body, token) {
 }
 
 function getUserNamesMap(ss) {
-  const sheet = ss.getSheetByName(SHEET_USUARIOS);
   const map = {};
-  if (!sheet) return map;
-  const data = sheet.getDataRange().getValues();
-  for (let i = 1; i < data.length; i++) {
-    if (data[i][0]) map[String(data[i][0])] = String(data[i][1] || data[i][0]);
-  }
+  const registro = leerRegistroUsuarios(ss);
+  registro.usuarios.forEach(usuario => {
+    if ((registro.porId[usuario.idKey] || []).length === 1) map[usuario.id] = usuario.nombre || usuario.id;
+  });
   return map;
 }
 
@@ -504,7 +684,10 @@ function crearReserva(body, token) {
     const user = getUserFromToken(token);
     const { consultorio, fecha, franja, duracion, nota } = body;
     if (user.rol === "asistente" && !body.targetUserId) return { ok: false, error: "Selecciona profesional" };
-    const userId = (esRolOperativo(user) && body.targetUserId) ? body.targetUserId : user.id;
+    const requestedUserId = (esRolOperativo(user) && body.targetUserId) ? body.targetUserId : user.id;
+    const identidad = resolverUsuarioUnico(SpreadsheetApp.getActiveSpreadsheet(), requestedUserId, { rol: "profesional" });
+    if (!identidad.ok) return identidad;
+    const userId = identidad.usuario.id;
 
     if (estaBloquado(consultorio, fecha, franja, duracion)) return { ok: false, error: "Franja bloqueada" };
     if (hayConflicto(consultorio, fecha, franja, duracion, null)) return { ok: false, error: "Conflicto de horario" };
@@ -623,7 +806,9 @@ function copiarReserva(body, token) {
       if (String(data[i][0]) !== String(body.id)) continue;
       const [, , userId, , , duracion, nota, , tipo] = data[i];
       if (!esRolOperativo(user) && user.id !== String(userId)) return { ok: false, error: "Sin permiso" };
-      const targetUserId = String(userId);
+      const identidad = resolverUsuarioUnico(SpreadsheetApp.getActiveSpreadsheet(), userId, { rol: "profesional" });
+      if (!identidad.ok) return { ok: false, error: `No se puede copiar esta reserva: ${identidad.error}` };
+      const targetUserId = identidad.usuario.id;
       if (estaBloquado(body.consultorio, body.fecha, body.franja, duracion)) return { ok: false, error: "Franja bloqueada" };
       if (hayConflicto(body.consultorio, body.fecha, body.franja, duracion, null)) return { ok: false, error: "Conflicto de horario" };
       const consultorioNombre = NOMBRES_CONSULTORIOS[Number(body.consultorio)] || String(body.consultorio);
@@ -817,6 +1002,7 @@ function diagnosticarDatos(token) {
   const ss = SpreadsheetApp.getActiveSpreadsheet();
   const usuarios = diagnosticarUsuarios(ss);
   const reservas = diagnosticarReservas(ss);
+  const identidadReservas = diagnosticarIdentidadReservas(ss);
   const bloqueos = diagnosticarBloqueos(ss);
   return {
     ok: true,
@@ -825,53 +1011,151 @@ function diagnosticarDatos(token) {
       usuariosRegistrados: usuarios.registrados,
       usuariosDuplicados: usuarios.totalDuplicados,
       usuariosInvalidos: usuarios.totalInvalidos,
+      nombresRepetidos: usuarios.totalNombresRepetidos,
+      nombresSimilares: usuarios.totalNombresSimilares,
+      correosDuplicados: usuarios.totalCorreosDuplicados,
       reservasActivas: reservas.activas,
       reservasDuplicadas: reservas.totalDuplicados,
       reservasInvalidas: reservas.totalInvalidos,
+      reservasIdentidadAmbigua: identidadReservas.totalProblemas,
       bloqueosActivos: bloqueos.activos,
       bloqueosDuplicados: bloqueos.totalDuplicados,
       bloqueosInvalidos: bloqueos.totalInvalidos
     },
     usuarios,
     reservas,
+    identidadReservas,
     bloqueos
   };
 }
 
 function diagnosticarUsuarios(ss) {
   const sheet = ss.getSheetByName(SHEET_USUARIOS);
-  const result = { registrados: 0, totalDuplicados: 0, totalInvalidos: 0, duplicados: [], invalidos: [] };
+  const result = {
+    registrados: 0,
+    totalDuplicados: 0,
+    totalInvalidos: 0,
+    totalNombresRepetidos: 0,
+    totalNombresSimilares: 0,
+    totalCorreosDuplicados: 0,
+    duplicados: [],
+    invalidos: [],
+    nombresRepetidos: [],
+    nombresSimilares: [],
+    correosDuplicados: []
+  };
   if (!sheet) {
     result.invalidos.push({ fila: null, id: "", problemas: ["No existe hoja de usuarios"] });
     result.totalInvalidos = result.invalidos.length;
     return result;
   }
 
-  const data = sheet.getDataRange().getValues();
+  const registro = leerRegistroUsuarios(ss);
   const porId = {};
-  for (let i = 1; i < data.length; i++) {
-    const [id, nombre, rol] = data[i];
-    if (!id && !nombre && !rol) continue;
+  const porNombre = {};
+  const porCorreo = {};
+  registro.usuarios.forEach(usuario => {
+    const { id: cleanId, nombre, rol: cleanRole, correo, fila } = usuario;
     result.registrados++;
-    const cleanId = String(id || "").trim();
-    const cleanRole = String(rol || "").trim().toLowerCase();
     const problemas = [];
     if (!cleanId) problemas.push("Sin id");
-    if (!String(nombre || "").trim()) problemas.push("Sin nombre");
-    if (!["admin", "socio", "asistente", "profesional"].includes(cleanRole)) problemas.push("Rol inválido");
-    if (problemas.length) result.invalidos.push({ fila: i + 1, id: cleanId, problemas });
+    if (!nombre) problemas.push("Sin nombre");
+    if (!ROLES_USUARIO.includes(cleanRole)) problemas.push("Rol inválido");
+    if (problemas.length) result.invalidos.push({ fila, id: cleanId, problemas });
     if (cleanId) {
       const key = "id:" + cleanId.toLowerCase();
       if (!porId[key]) porId[key] = [];
-      porId[key].push({ fila: i + 1, id: cleanId, problemas: [] });
+      porId[key].push({ fila, id: cleanId, nombre, problemas: [] });
     }
-  }
+    if (usuario.nombreKey) {
+      const key = "nombre:" + usuario.nombreKey;
+      if (!porNombre[key]) porNombre[key] = [];
+      porNombre[key].push({ fila, id: cleanId, nombre, problemas: [] });
+    }
+    if (usuario.correoKey) {
+      const key = "correo:" + usuario.correoKey;
+      if (!porCorreo[key]) porCorreo[key] = [];
+      porCorreo[key].push({ fila, id: cleanId, nombre, correo, problemas: [] });
+    }
+  });
 
   const duplicados = gruposDuplicados(porId, "ID de usuario repetido");
+  const nombresRepetidos = gruposDuplicados(porNombre, "Nombre visible repetido (permitido, revisar IDs)");
+  const correosDuplicados = gruposDuplicados(porCorreo, "Correo repetido");
+  const similares = detectarNombresSimilares(registro.usuarios);
   result.totalDuplicados = duplicados.length;
+  result.totalInvalidos = result.invalidos.length;
+  result.totalNombresRepetidos = nombresRepetidos.length;
+  result.totalNombresSimilares = similares.length;
+  result.totalCorreosDuplicados = correosDuplicados.length;
   result.duplicados = limitarEjemplos(duplicados);
   result.invalidos = limitarEjemplos(result.invalidos);
-  result.totalInvalidos = result.invalidos.length;
+  result.nombresRepetidos = limitarEjemplos(nombresRepetidos);
+  result.nombresSimilares = limitarEjemplos(similares);
+  result.correosDuplicados = limitarEjemplos(correosDuplicados);
+  return result;
+}
+
+function detectarNombresSimilares(usuarios) {
+  const ejemplos = [];
+  for (let i = 0; i < usuarios.length; i++) {
+    for (let j = i + 1; j < usuarios.length; j++) {
+      const a = usuarios[i];
+      const b = usuarios[j];
+      if (!a.nombreKey || !b.nombreKey || a.nombreKey === b.nombreKey) continue;
+      const primeroA = a.nombreKey.split(" ")[0];
+      const primeroB = b.nombreKey.split(" ")[0];
+      if (primeroA.length >= 4 && primeroA === primeroB) {
+        ejemplos.push({
+          tipo: "Nombres similares (solo aviso)",
+          cantidad: 2,
+          items: [
+            { fila: a.fila, id: a.id, nombre: a.nombre },
+            { fila: b.fila, id: b.id, nombre: b.nombre }
+          ]
+        });
+      }
+    }
+  }
+  return ejemplos;
+}
+
+function diagnosticarIdentidadReservas(ss) {
+  const result = { revisadas: 0, totalProblemas: 0, problemas: [] };
+  const sheet = ss.getSheetByName(SHEET_RESERVAS);
+  if (!sheet) return result;
+  const registro = leerRegistroUsuarios(ss);
+  const data = sheet.getDataRange().getValues();
+  for (let i = 1; i < data.length; i++) {
+    const row = data[i];
+    if (!row[0]) continue;
+    result.revisadas++;
+    const userId = String(row[2] || "").trim();
+    const problemas = [];
+    const matches = registro.porId[normalizarUserId(userId)] || [];
+    if (!userId) problemas.push("Reserva sin ID de profesional");
+    else if (matches.length > 1) problemas.push(`ID de profesional ambiguo: ${userId}`);
+    else if (matches.length === 0) {
+      const porNombre = registro.porNombre[normalizarNombre(userId)] || [];
+      if (porNombre.length) problemas.push(`El valor "${userId}" coincide con un nombre, no con un ID; requiere revisión manual`);
+      else problemas.push(`Profesional no encontrado: ${userId}`);
+    } else if (matches[0].id !== userId) {
+      problemas.push(`El ID "${userId}" difiere en mayúsculas/minúsculas del ID canónico "${matches[0].id}"; requiere revisión manual`);
+    } else if (matches[0].rol !== "profesional") {
+      problemas.push(`El ID ${userId} pertenece al rol ${matches[0].rol}, no a un profesional`);
+    }
+    if (problemas.length) {
+      result.problemas.push({
+        fila: i + 1,
+        id: String(row[0] || ""),
+        profesionalId: userId,
+        fecha: fechaToString(row[3]),
+        problemas
+      });
+    }
+  }
+  result.totalProblemas = result.problemas.length;
+  result.problemas = limitarEjemplos(result.problemas);
   return result;
 }
 
@@ -1034,7 +1318,12 @@ function generarPreestablecidas(body, token) {
     const user = getUserFromToken(token);
     if (user.rol !== "admin") return { ok: false, error: "Solo admin" };
 
-    const sheet = SpreadsheetApp.getActiveSpreadsheet().getSheetByName(SHEET_RESERVAS);
+    const ss = SpreadsheetApp.getActiveSpreadsheet();
+    const daniela = resolverUsuarioUnico(ss, "daniela", { rol: "profesional" });
+    const ramiro = resolverUsuarioUnico(ss, "ramiro", { rol: "profesional" });
+    if (!daniela.ok) return { ok: false, error: `No se generaron reservas fijas: ${daniela.error}` };
+    if (!ramiro.ok) return { ok: false, error: `No se generaron reservas fijas: ${ramiro.error}` };
+    const sheet = ss.getSheetByName(SHEET_RESERVAS);
     const hoy = new Date();
     let creadas = 0;
 
@@ -1048,17 +1337,17 @@ function generarPreestablecidas(body, token) {
 
         // Daniela: Consultorio 1, 2pm(franja 12) duración 180min
         if (!hayConflicto(0, fechaStr, 12, 180, null)) {
-          sheet.appendRow(["PRE_D_"+fechaStr, "Consultorio 1", "daniela", fechaStr, 12, 180, "Reserva fija Daniela", true, "preestablecida", "confirmada"]);
+          sheet.appendRow(["PRE_D_"+fechaStr, "Consultorio 1", daniela.usuario.id, fechaStr, 12, 180, "Reserva fija Daniela", true, "preestablecida", "confirmada"]);
           creadas++;
         }
         // Ramiro: Consultorio 3, 10am(franja 4) duración 120min
         if (!hayConflicto(2, fechaStr, 4, 120, null)) {
-          sheet.appendRow(["PRE_R1_"+fechaStr, "Consultorio 3", "ramiro", fechaStr, 4, 120, "Reserva fija Ramiro mañana", true, "preestablecida", "confirmada"]);
+          sheet.appendRow(["PRE_R1_"+fechaStr, "Consultorio 3", ramiro.usuario.id, fechaStr, 4, 120, "Reserva fija Ramiro mañana", true, "preestablecida", "confirmada"]);
           creadas++;
         }
         // Ramiro: Consultorio 3, 2pm(franja 12) duración 120min
         if (!hayConflicto(2, fechaStr, 12, 120, null)) {
-          sheet.appendRow(["PRE_R2_"+fechaStr, "Consultorio 3", "ramiro", fechaStr, 12, 120, "Reserva fija Ramiro tarde", true, "preestablecida", "confirmada"]);
+          sheet.appendRow(["PRE_R2_"+fechaStr, "Consultorio 3", ramiro.usuario.id, fechaStr, 12, 120, "Reserva fija Ramiro tarde", true, "preestablecida", "confirmada"]);
           creadas++;
         }
       }

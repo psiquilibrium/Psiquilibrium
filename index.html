@@ -259,6 +259,10 @@ function App(){
   const [modal,setModal]=useState(null);
   const [bloqueoModal,setBloqueoModal]=useState(null);
   const [diagnostico,setDiagnostico]=useState(null);
+  const [usuariosAdmin,setUsuariosAdmin]=useState(null);
+  const [usuariosLoading,setUsuariosLoading]=useState(false);
+  const [usuarioModal,setUsuarioModal]=useState(null);
+  const [usuarioForm,setUsuarioForm]=useState({id:"",nombre:"",rol:"profesional",correo:"",activo:true,password:""});
   const [auditoria,setAuditoria]=useState([]);
   const [auditoriaLoading,setAuditoriaLoading]=useState(false);
   const [auditoriaError,setAuditoriaError]=useState(null);
@@ -297,6 +301,7 @@ function App(){
   const [syncingById,setSyncingById]=useState({});
   const pasteInFlightRef=useRef(false);
   const formActionInFlightRef=useRef(false);
+  const usuarioActionInFlightRef=useRef(false);
 
   useEffect(()=>{
     const onResize=()=>setIsMobile(window.innerWidth<=720);
@@ -328,6 +333,8 @@ function App(){
   },[allUsers]);
   const getUserColor=uid=>userMeta.colors.get(uid)||USER_COLORS[0];
   const getUserName=uid=>userMeta.names.get(uid)||uid;
+  const getUserDisplay=uid=>userMeta.names.has(uid)?`${userMeta.names.get(uid)} · ID ${uid}`:uid;
+  const userOptionLabel=u=>`${u.nombre} · ID ${u.id}`;
 
   const slotKey=(cons,fecha,fi)=>`${cons}|${fecha}|${fi}`;
   const agendaIndex=useMemo(()=>{
@@ -744,7 +751,7 @@ function App(){
     const confirmar=window.confirm([
       "¿Eliminar esta reserva cancelada?",
       "",
-      `Profesional: ${getUserName(previous.userId)}`,
+      `Profesional: ${getUserDisplay(previous.userId)}`,
       `Fecha: ${previous.fecha}`,
       `Horario: ${horaInicio} – ${horaFin}`,
       `Consultorio: ${CONS[previous.consultorio]||previous.consultorio}`,
@@ -906,6 +913,55 @@ function App(){
       else setError(d.error||"No se pudo diagnosticar.");
     }catch{setError("Error al diagnosticar datos.");}
     setLoading(false);
+  };
+
+  const aplicarUsuariosActivos=usuarios=>{
+    const activos=(usuarios||[]).filter(u=>u.activo&&!u.idDuplicado).map(({id,nombre,rol})=>({id,nombre,rol}));
+    setAllUsers(activos);
+    try{
+      const saved=JSON.parse(sessionStorage.getItem(SESSION_KEY)||"null");
+      if(saved){saved.users=activos;sessionStorage.setItem(SESSION_KEY,JSON.stringify(saved));}
+    }catch{}
+  };
+
+  const fetchUsuariosAdmin=async()=>{
+    if(!isAdmin)return;
+    setUsuariosLoading(true);setError(null);
+    try{
+      const d=await api({action:"getUsuariosAdmin",token},{timeoutMs:READ_TIMEOUT_MS});
+      if(d.ok){setUsuariosAdmin(d.usuarios||[]);aplicarUsuariosActivos(d.usuarios||[]);}
+      else setError(d.error||"No se pudieron cargar los usuarios.");
+    }catch(err){setError(requestErrorMessage(err,"cargar usuarios"));}
+    finally{setUsuariosLoading(false);}
+  };
+
+  const openNuevoUsuario=()=>{
+    setUsuarioForm({id:"",nombre:"",rol:"profesional",correo:"",activo:true,password:""});
+    setUsuarioModal({mode:"nuevo"});
+  };
+
+  const openEditarUsuario=usuario=>{
+    setUsuarioForm({id:usuario.id,nombre:usuario.nombre,rol:usuario.rol,correo:usuario.correo||"",activo:usuario.activo,password:""});
+    setUsuarioModal({mode:"editar"});
+  };
+
+  const handleGuardarUsuario=async()=>{
+    if(usuarioActionInFlightRef.current)return;
+    usuarioActionInFlightRef.current=true;setUsuariosLoading(true);setError(null);
+    try{
+      const action=usuarioModal.mode==="nuevo"?"crearUsuario":"editarUsuario";
+      const d=await api({action,token,...usuarioForm});
+      if(!d.ok){const msg=d.error||"No se pudo guardar el usuario.";setError(msg);showToast(msg,"danger");return;}
+      if(currentUser?.id===d.usuario?.id&&d.usuario?.nombre!==currentUser.nombre){
+        const updated={...currentUser,nombre:d.usuario.nombre};
+        setCurrentUser(updated);
+        try{const saved=JSON.parse(sessionStorage.getItem(SESSION_KEY)||"null");if(saved){saved.user=updated;sessionStorage.setItem(SESSION_KEY,JSON.stringify(saved));}}catch{}
+      }
+      setUsuarioModal(null);
+      await fetchUsuariosAdmin();
+      showToast(d.avisoNombre||(`Usuario ${usuarioModal.mode==="nuevo"?"creado":"actualizado"}`),d.avisoNombre?"warning":"success");
+    }catch(err){const msg=requestErrorMessage(err,"guardar el usuario");setError(msg);showToast(msg,"danger");}
+    finally{usuarioActionInFlightRef.current=false;setUsuariosLoading(false);}
   };
 
   const handleCrearRespaldo=async()=>{
@@ -1217,9 +1273,9 @@ function App(){
     else start.setDate(now.getDate()-Number(actividadFiltros.periodo||7));
     return ts>=start;
   });
-  const accionTexto={crear:"Creada",editar:"Editada",mover:"Movida",cancelar:"Cancelada",reconfirmar:"Reconfirmada",eliminar:"Eliminada",respaldo:"Respaldo"};
-  const accionColor={crear:"var(--success)",editar:"var(--navy)",mover:"#9B3FA0",cancelar:"var(--danger)",reconfirmar:"var(--success)",eliminar:"var(--muted)",respaldo:"var(--blocked-border)"};
-  const tipoTexto={reserva:"Reserva",bloqueo:"Bloqueo",sistema:"Sistema"};
+  const accionTexto={crear:"Creada",editar:"Editada",activar:"Activada",desactivar:"Desactivada",mover:"Movida",cancelar:"Cancelada",reconfirmar:"Reconfirmada",eliminar:"Eliminada",respaldo:"Respaldo"};
+  const accionColor={crear:"var(--success)",editar:"var(--navy)",activar:"var(--success)",desactivar:"var(--danger)",mover:"#9B3FA0",cancelar:"var(--danger)",reconfirmar:"var(--success)",eliminar:"var(--muted)",respaldo:"var(--blocked-border)"};
+  const tipoTexto={reserva:"Reserva",bloqueo:"Bloqueo",usuario:"Usuario",sistema:"Sistema"};
   const viewLabels={"consolidada":"Agenda","semana":"Semana","mis reservas":"Mis reservas",todas:"Todas",reportes:"Reportes",actividad:"Actividad"};
   const renderEjemplos=items=>(items||[]).slice(0,3).map((x,i)=>{
     const filas=x.items?x.items.map(it=>it.fila).join(", "):x.fila;
@@ -1435,6 +1491,7 @@ function App(){
             </div>
             {(canCreateBackup||isAdmin)&&<div className="toolbar-actions">
               {canCreateBackup&&<button onClick={handleCrearRespaldo} disabled={loading} style={{fontSize:12,background:"#fff",color:"var(--navy)",border:"1px solid var(--border)"}}>Crear respaldo</button>}
+              {isAdmin&&<button onClick={()=>usuariosAdmin===null?fetchUsuariosAdmin():setUsuariosAdmin(null)} disabled={usuariosLoading} style={{fontSize:12,background:"#fff",color:"var(--navy)",border:"1px solid var(--border)"}}>{usuariosLoading?"Cargando...":usuariosAdmin===null?"Usuarios":"Cerrar usuarios"}</button>}
               {isAdmin&&<button onClick={handleDiagnostico} disabled={loading} style={{fontSize:12,background:"#fff",color:"var(--navy)",border:"1px solid var(--border)"}}>Diagnosticar datos</button>}
               {isAdmin&&<button onClick={async()=>{setLoading(true);try{const d=await api({action:"generarPreestablecidas",token});if(d.ok){await fetchAll(token);showToast(`${d.creadas} reservas fijas generadas`);}else setError(d.error);}catch{setError("Error.");}setLoading(false);}} style={{fontSize:12,background:"var(--cyan-light)",color:"var(--navy)"}}>⚡ Generar reservas fijas</button>}
             </div>}
@@ -1444,7 +1501,7 @@ function App(){
               <div><label style={s.label}>Profesional</label>
                 <select value={todasFiltros.profesional} onChange={e=>setTodasFiltros(f=>({...f,profesional:e.target.value}))}>
                   <option value="todos">Todos</option>
-                  {profesionales.map(u=><option key={u.id} value={u.id}>{u.nombre}</option>)}
+                  {profesionales.map(u=><option key={u.id} value={u.id}>{userOptionLabel(u)}</option>)}
                 </select>
               </div>
               <div><label style={s.label}>Consultorio</label>
@@ -1476,6 +1533,27 @@ function App(){
             </div>
             {todasFiltros.alcance==="semana"&&<div style={{marginTop:10}}><NavSemana/></div>}
           </div>
+          {isAdmin&&usuariosAdmin!==null&&(
+            <div className="filters-panel" style={{marginBottom:12}}>
+              <div style={{display:"flex",justifyContent:"space-between",gap:8,alignItems:"center",flexWrap:"wrap",marginBottom:8}}>
+                <div>
+                  <div style={{fontWeight:600,fontSize:13,color:"var(--navy)"}}>Usuarios</div>
+                  <div style={s.muted}>El ID identifica a la persona y no cambia al editar su nombre.</div>
+                </div>
+                <button onClick={openNuevoUsuario} disabled={usuariosLoading} style={{fontSize:12,background:"var(--navy)",color:"#fff",border:"none"}}>Nuevo usuario</button>
+              </div>
+              {(usuariosAdmin||[]).map(u=>(
+                <div key={`${u.fila}-${u.id}`} className="list-card" style={{padding:"0.65rem",marginBottom:6,borderLeft:u.idDuplicado?"4px solid var(--danger)":"4px solid var(--cyan)"}}>
+                  <div className="list-main">
+                    <div className="list-title">{u.nombre||"Sin nombre"} <span style={{fontWeight:400,color:"var(--muted)"}}>· {u.id||"Sin ID"}</span></div>
+                    <div className="list-meta">{u.rol} · {u.activo?"Activo":"Inactivo"}{u.correo?` · ${u.correo}`:""}{u.idDuplicado?" · ID duplicado":u.nombreRepetido?" · Nombre repetido, IDs distintos":""}</div>
+                  </div>
+                  <button onClick={()=>openEditarUsuario(u)} disabled={usuariosLoading||u.idDuplicado||!u.id} style={{fontSize:12}}>Editar</button>
+                </div>
+              ))}
+              {(usuariosAdmin||[]).length===0&&<div style={s.muted}>No hay usuarios registrados.</div>}
+            </div>
+          )}
           {diagnostico&&(
             <div style={{...s.card,marginBottom:12,borderLeft:"3px solid var(--cyan)"}}>
               <div style={{display:"flex",justifyContent:"space-between",gap:8,flexWrap:"wrap",marginBottom:8}}>
@@ -1486,9 +1564,13 @@ function App(){
                 <div style={s.muted}>Usuarios registrados: <strong>{countDiag(diagnostico.resumen.usuariosRegistrados)}</strong></div>
                 <div style={s.muted}>IDs de usuario repetidos: <strong>{countDiag(diagnostico.resumen.usuariosDuplicados)}</strong></div>
                 <div style={s.muted}>Usuarios inválidos: <strong>{countDiag(diagnostico.resumen.usuariosInvalidos)}</strong></div>
+                <div style={s.muted}>Nombres repetidos: <strong>{countDiag(diagnostico.resumen.nombresRepetidos)}</strong></div>
+                <div style={s.muted}>Nombres similares: <strong>{countDiag(diagnostico.resumen.nombresSimilares)}</strong></div>
+                <div style={s.muted}>Correos repetidos: <strong>{countDiag(diagnostico.resumen.correosDuplicados)}</strong></div>
                 <div style={s.muted}>Reservas activas: <strong>{countDiag(diagnostico.resumen.reservasActivas)}</strong></div>
                 <div style={s.muted}>Reservas duplicadas: <strong>{countDiag(diagnostico.resumen.reservasDuplicadas)}</strong></div>
                 <div style={s.muted}>Reservas inválidas: <strong>{countDiag(diagnostico.resumen.reservasInvalidas)}</strong></div>
+                <div style={s.muted}>Reservas con identidad por revisar: <strong>{countDiag(diagnostico.resumen.reservasIdentidadAmbigua)}</strong></div>
                 <div style={s.muted}>Bloqueos activos: <strong>{countDiag(diagnostico.resumen.bloqueosActivos)}</strong></div>
                 <div style={s.muted}>Bloqueos duplicados: <strong>{countDiag(diagnostico.resumen.bloqueosDuplicados)}</strong></div>
                 <div style={s.muted}>Bloqueos inválidos: <strong>{countDiag(diagnostico.resumen.bloqueosInvalidos)}</strong></div>
@@ -1496,11 +1578,15 @@ function App(){
               <div style={{marginTop:8}}>
                 {renderEjemplos(diagnostico.usuarios?.duplicados)}
                 {renderEjemplos(diagnostico.usuarios?.invalidos)}
+                {renderEjemplos(diagnostico.usuarios?.nombresRepetidos)}
+                {renderEjemplos(diagnostico.usuarios?.nombresSimilares)}
+                {renderEjemplos(diagnostico.usuarios?.correosDuplicados)}
                 {renderEjemplos(diagnostico.reservas.duplicados)}
                 {renderEjemplos(diagnostico.reservas.invalidos)}
+                {renderEjemplos(diagnostico.identidadReservas?.problemas)}
                 {renderEjemplos(diagnostico.bloqueos.duplicados)}
                 {renderEjemplos(diagnostico.bloqueos.invalidos)}
-                {countDiag(diagnostico.resumen.usuariosDuplicados)+countDiag(diagnostico.resumen.usuariosInvalidos)+countDiag(diagnostico.resumen.reservasDuplicadas)+countDiag(diagnostico.resumen.reservasInvalidas)+countDiag(diagnostico.resumen.bloqueosDuplicados)+countDiag(diagnostico.resumen.bloqueosInvalidos)===0&&<div style={s.muted}>No se encontraron duplicados ni inválidos activos.</div>}
+                {countDiag(diagnostico.resumen.usuariosDuplicados)+countDiag(diagnostico.resumen.usuariosInvalidos)+countDiag(diagnostico.resumen.nombresRepetidos)+countDiag(diagnostico.resumen.nombresSimilares)+countDiag(diagnostico.resumen.correosDuplicados)+countDiag(diagnostico.resumen.reservasIdentidadAmbigua)+countDiag(diagnostico.resumen.reservasDuplicadas)+countDiag(diagnostico.resumen.reservasInvalidas)+countDiag(diagnostico.resumen.bloqueosDuplicados)+countDiag(diagnostico.resumen.bloqueosInvalidos)===0&&<div style={s.muted}>No se encontraron identidades ambiguas, duplicados ni datos inválidos.</div>}
               </div>
             </div>
           )}
@@ -1521,7 +1607,7 @@ function App(){
                     {r.tipo==="preestablecida"&&<span className="status-chip chip-info">Fija</span>}
                     {syncing&&<span className="status-chip chip-muted">{syncLabel}</span>}
                   </div>
-                  <div className="list-meta">{r.fecha} · {u?.nombre||r.userId}{r.nota?` · ${r.nota}`:""}</div>
+                  <div className="list-meta">{r.fecha} · {u?userOptionLabel(u):r.userId}{r.nota?` · ${r.nota}`:""}</div>
                 </div>
                 <div className="list-actions">
                   {canOperateReservations&&!cancelled&&<button onClick={()=>handleEstado(r.id,"cancelada")} disabled={syncing} style={{fontSize:11,color:"var(--danger)",background:"var(--danger-bg)",border:"1px solid #f5c6c0"}}>✗</button>}
@@ -1563,7 +1649,7 @@ function App(){
               <div><label style={s.label}>Profesional</label>
                 <select value={reporteFiltros.profesional} onChange={e=>setReporteFiltros(f=>({...f,profesional:e.target.value}))}>
                   <option value="todos">Todos</option>
-                  {profesionales.map(u=><option key={u.id} value={u.id}>{u.nombre}</option>)}
+                  {profesionales.map(u=><option key={u.id} value={u.id}>{userOptionLabel(u)}</option>)}
                 </select>
               </div>
             </div>
@@ -1627,6 +1713,7 @@ function App(){
                   <option value="todos">Todo</option>
                   <option value="reserva">Reservas</option>
                   <option value="bloqueo">Bloqueos</option>
+                  <option value="usuario">Usuarios</option>
                 </select>
               </div>
               <div><label style={s.label}>Acción</label>
@@ -1634,6 +1721,8 @@ function App(){
                   <option value="todas">Todas</option>
                   <option value="crear">Creadas</option>
                   <option value="editar">Editadas</option>
+                  <option value="activar">Activadas</option>
+                  <option value="desactivar">Desactivadas</option>
                   <option value="mover">Movidas</option>
                   <option value="cancelar">Canceladas</option>
                   <option value="reconfirmar">Reconfirmadas</option>
@@ -1670,6 +1759,39 @@ function App(){
         </div>
       )}
 
+      {/* MODAL USUARIO */}
+      {usuarioModal&&isAdmin&&(
+        <div style={s.modalBackdrop}>
+          <div style={s.modalCard}>
+            <div style={{fontWeight:600,fontSize:15,marginBottom:4,color:"var(--navy)"}}>{usuarioModal.mode==="nuevo"?"Nuevo usuario":"Editar usuario"}</div>
+            <div style={{...s.muted,marginBottom:16}}>El ID es la identidad estable. El nombre visible sí puede cambiar.</div>
+            <label style={s.label}>ID único</label>
+            <input value={usuarioForm.id} disabled={usuarioModal.mode==="editar"} onChange={e=>setUsuarioForm(f=>({...f,id:e.target.value}))} placeholder="ej. andrea.orozco" autoCapitalize="none" style={{marginBottom:12}}/>
+            <label style={s.label}>Nombre visible</label>
+            <input value={usuarioForm.nombre} onChange={e=>setUsuarioForm(f=>({...f,nombre:e.target.value}))} placeholder="Nombre completo" style={{marginBottom:12}}/>
+            <label style={s.label}>Rol</label>
+            <select value={usuarioForm.rol} onChange={e=>setUsuarioForm(f=>({...f,rol:e.target.value}))} style={{marginBottom:12}}>
+              <option value="profesional">Profesional</option>
+              <option value="asistente">Asistente</option>
+              <option value="socio">Socio</option>
+              <option value="admin">Admin</option>
+            </select>
+            <label style={s.label}>Correo (opcional)</label>
+            <input type="email" value={usuarioForm.correo} onChange={e=>setUsuarioForm(f=>({...f,correo:e.target.value}))} autoCapitalize="none" style={{marginBottom:12}}/>
+            <label style={s.label}>{usuarioModal.mode==="nuevo"?"Contraseña":"Nueva contraseña (dejar vacía para conservar)"}</label>
+            <input type="password" value={usuarioForm.password} onChange={e=>setUsuarioForm(f=>({...f,password:e.target.value}))} style={{marginBottom:12}}/>
+            <label style={{display:"flex",alignItems:"center",gap:8,fontSize:13,marginBottom:16}}>
+              <input type="checkbox" checked={usuarioForm.activo} onChange={e=>setUsuarioForm(f=>({...f,activo:e.target.checked}))} style={{width:18,height:18}}/>
+              Cuenta activa
+            </label>
+            <div style={s.modalActions}>
+              <button onClick={()=>setUsuarioModal(null)} disabled={usuariosLoading} style={{color:"var(--muted)"}}>Cancelar</button>
+              <button onClick={handleGuardarUsuario} disabled={usuariosLoading||!usuarioForm.id.trim()||!usuarioForm.nombre.trim()||(usuarioModal.mode==="nuevo"&&!usuarioForm.password.trim())} style={{background:"var(--navy)",color:"#fff",border:"none"}}>{usuariosLoading?"Guardando...":"Guardar"}</button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* MODAL RESERVA */}
       {modal&&(
         <div style={s.modalBackdrop}>
@@ -1680,7 +1802,7 @@ function App(){
               {canCreateForOthers&&(<><label style={s.label}>Profesional</label>
                 <select value={form.profesionalId} onChange={e=>setForm(f=>({...f,profesionalId:e.target.value}))} style={{marginBottom:12}}>
                   <option value="">— Seleccionar —</option>
-                  {profesionales.map(u=><option key={u.id} value={u.id}>{u.nombre}</option>)}
+                  {profesionales.map(u=><option key={u.id} value={u.id}>{userOptionLabel(u)}</option>)}
                 </select></>)}
               <div style={{display:"flex",gap:8,marginBottom:12}}>
                 <div style={{flex:1}}><label style={s.label}>Hora inicio</label>
@@ -1709,7 +1831,7 @@ function App(){
                   :<span style={{fontSize:11,background:"var(--success-bg)",color:"var(--success)",padding:"2px 8px",borderRadius:6}}>Confirmada</span>}
               </div>
               <div style={{...s.muted,marginBottom:12}}>{CONS[modal.reserva.consultorio]} · {modal.reserva.fecha} · {FRANJAS[modal.reserva.franja]} – {FRANJAS[modal.reserva.franja+modal.reserva.duracion/30]||"18:00"}</div>
-              <div style={{fontSize:13,marginBottom:4}}><span style={{color:"var(--muted)"}}>Profesional: </span>{getUserName(modal.reserva.userId)}</div>
+              <div style={{fontSize:13,marginBottom:4}}><span style={{color:"var(--muted)"}}>Profesional: </span>{getUserDisplay(modal.reserva.userId)}</div>
               {modal.reserva.tipo==="preestablecida"&&<div style={{fontSize:12,background:"var(--cyan-light)",color:"var(--navy)",padding:"3px 8px",borderRadius:6,marginBottom:8,display:"inline-block"}}>Reserva fija</div>}
               {modal.canEdit&&modal.reserva.estado!=="cancelada"?(<>
                 <div style={{display:"flex",gap:8,marginTop:10,marginBottom:12}}>
