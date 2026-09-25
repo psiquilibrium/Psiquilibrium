@@ -12,6 +12,8 @@ const ROLES_USUARIO = ["admin", "socio", "asistente", "profesional"];
 const USER_HEADERS = ["id", "nombre", "rol", "contraseña", "correo", "activo"];
 const CACHE_AGENDA_PREFIX = "agenda_v1_";
 const OPERATION_RETENTION_DAYS = 180;
+const INTEGRITY_DETAIL_LIMIT = 300;
+const INTEGRITY_RECENT_AUDIT_DAYS = 30;
 const PERFORMANCE_METRICS_ENABLED = true; // Temporal: desactivar tras cerrar el diagnóstico.
 
 // Franjas: 0=8:00, 1=8:30, 2=9:00 ... 19=17:30, 20=18:00 (no incluida)
@@ -57,6 +59,7 @@ function handle(e) {
       case "editarUsuario":          return resp(editarUsuario(merged, token));
       case "crearRespaldoManual":    return resp(crearRespaldoManual(token));
       case "generarPreestablecidas": return resp(generarPreestablecidas(merged, token));
+      case "verificarIntegridad":    return respMedida(verificarIntegridad(token), action, startedAt);
       case "diagnosticarDatos":      return resp(diagnosticarDatos(token));
       case "migrarFranjas":          return resp(migrarFranjas(token));
       default: return resp({ ok: false, error: "Acción no reconocida" });
@@ -1205,7 +1208,439 @@ function moverBloqueo(body, token) {
   });
 }
 
-// ── Diagnóstico de datos (solo lectura) ──────────────────────
+// ── Verificación preventiva de integridad (solo lectura) ─────
+function verificarIntegridad(token) {
+  const user = getUserFromToken(token);
+  if (user.rol !== "admin") return { ok: false, error: "Solo un administrador puede verificar la integridad de los datos." };
+
+  const cache = CacheService.getScriptCache();
+  const guardKey = "verificacion_integridad_en_curso";
+  try {
+    if (cache.get(guardKey)) {
+      return { ok: false, busy: true, error: "Ya hay una verificación en curso. Espera un momento e intenta de nuevo." };
+    }
+    cache.put(guardKey, "1", 120);
+  } catch (err) {}
+
+  try {
+    const startedAt = Date.now();
+    const ss = SpreadsheetApp.getActiveSpreadsheet();
+    const hojas = { [SHEET_USUARIOS]: leerHojaIntegridad(ss, SHEET_USUARIOS) };
+    const administradores = hojas[SHEET_USUARIOS].filas.filter(item =>
+      String(item.values[0] || "").trim() === user.id &&
+      String(item.values[2] || "").trim().toLowerCase() === "admin" &&
+      usuarioEstaActivo(item.values[5])
+    );
+    if (administradores.length !== 1) {
+      return { ok: false, error: "Tu cuenta no tiene autorización administrativa vigente para ejecutar esta verificación." };
+    }
+    [SHEET_RESERVAS, SHEET_BLOQUEOS, SHEET_AUDITORIA, SHEET_OPERACIONES].forEach(nombre => {
+      hojas[nombre] = leerHojaIntegridad(ss, nombre);
+    });
+
+    const informe = crearInformeIntegridad(hojas);
+    const usuarios = verificarUsuariosIntegridad(informe, hojas[SHEET_USUARIOS]);
+    const reservas = verificarReservasIntegridad(informe, hojas[SHEET_RESERVAS], usuarios);
+    const bloqueos = verificarBloqueosIntegridad(informe, hojas[SHEET_BLOQUEOS]);
+    const auditoria = verificarAuditoriaIntegridad(informe, hojas[SHEET_AUDITORIA], usuarios, reservas, bloqueos);
+    verificarOperacionesIntegridad(informe, hojas[SHEET_OPERACIONES], usuarios, reservas, bloqueos, auditoria);
+    verificarCrucesAgendaIntegridad(informe, reservas.validasActivas, bloqueos.validosActivos);
+
+    informe.resumen.total = informe.resumen.critico + informe.resumen.advertencia + informe.resumen.informativo;
+    informe.hallazgosOmitidos = Math.max(0, informe.resumen.total - informe.hallazgos.length);
+    informe.duracionMs = Date.now() - startedAt;
+    return informe;
+  } finally {
+    try { cache.remove(guardKey); } catch (err) {}
+  }
+}
+
+function leerHojaIntegridad(ss, nombre) {
+  const sheet = ss.getSheetByName(nombre);
+  if (!sheet) return { nombre, existe: false, encabezados: [], filas: [] };
+  const data = sheet.getDataRange().getValues();
+  return {
+    nombre,
+    existe: true,
+    encabezados: data.length ? data[0] : [],
+    filas: data.slice(1).map((values, index) => ({ fila: index + 2, values }))
+      .filter(item => item.values.some(value => String(value === null || typeof value === "undefined" ? "" : value).trim()))
+  };
+}
+
+function crearInformeIntegridad(hojas) {
+  const revisados = {};
+  let totalRegistros = 0;
+  Object.keys(hojas).forEach(nombre => {
+    revisados[nombre] = hojas[nombre].filas.length;
+    totalRegistros += hojas[nombre].filas.length;
+  });
+  return {
+    ok: true,
+    generadoEn: Utilities.formatDate(new Date(), Session.getScriptTimeZone(), "yyyy-MM-dd HH:mm:ss"),
+    totalRegistros,
+    revisados,
+    resumen: { critico: 0, advertencia: 0, informativo: 0, total: 0 },
+    hallazgos: [],
+    hallazgosOmitidos: 0
+  };
+}
+
+function agregarHallazgoIntegridad(informe, severidad, hoja, fila, id, regla, mensaje) {
+  informe.resumen[severidad]++;
+  if (informe.hallazgos.length >= INTEGRITY_DETAIL_LIMIT) return;
+  informe.hallazgos.push({
+    severidad,
+    hoja,
+    fila: fila || null,
+    id: String(id || ""),
+    regla,
+    mensaje
+  });
+}
+
+function agruparIntegridad(map, key, item) {
+  if (!key) return;
+  if (!map[key]) map[key] = [];
+  map[key].push(item);
+}
+
+function registrarGruposIntegridad(informe, map, severidad, hoja, regla, mensaje) {
+  Object.keys(map).forEach(key => {
+    const items = map[key];
+    if (items.length < 2) return;
+    agregarHallazgoIntegridad(
+      informe,
+      severidad,
+      hoja,
+      items[0].fila,
+      items[0].id,
+      regla,
+      `${mensaje}. Filas: ${items.map(item => item.fila).join(", ")}.`
+    );
+  });
+}
+
+function validarEncabezadosIntegridad(informe, hoja, esperados, opcionalesDesde) {
+  if (!hoja.existe) return;
+  esperados.forEach((esperado, index) => {
+    const actual = normalizarNombre(hoja.encabezados[index]);
+    if (!actual && Number.isInteger(opcionalesDesde) && index >= opcionalesDesde) return;
+    const aliases = Array.isArray(esperado) ? esperado : [esperado];
+    if (!aliases.map(normalizarNombre).includes(actual)) {
+      agregarHallazgoIntegridad(informe, "advertencia", hoja.nombre, 1, "", "encabezado_inesperado", `La columna ${index + 1} tiene un encabezado inesperado.`);
+    }
+  });
+}
+
+function fechaMsIntegridad(value) {
+  if (value instanceof Date) return value.getTime();
+  const text = String(value || "").trim();
+  if (!text) return NaN;
+  return new Date(text.replace(" ", "T")).getTime();
+}
+
+function verificarUsuariosIntegridad(informe, hoja) {
+  const indice = { porId: {}, porNombre: {}, porCorreo: {}, ids: {} };
+  if (!hoja.existe) {
+    agregarHallazgoIntegridad(informe, "critico", SHEET_USUARIOS, null, "", "hoja_faltante", "No existe la hoja Usuarios.");
+    return indice;
+  }
+  validarEncabezadosIntegridad(informe, hoja, [["id", "userid", "usuario"], "nombre", "rol", ["contraseña", "password", "clave"], ["correo", "email"], ["activo", "activa"]], 4);
+
+  hoja.filas.forEach(item => {
+    const row = item.values;
+    const usuario = {
+      fila: item.fila,
+      id: String(row[0] || "").trim(),
+      nombre: String(row[1] || "").trim(),
+      rol: String(row[2] || "").trim().toLowerCase(),
+      tieneCredencial: !!String(row[3] || "").trim(),
+      correoKey: normalizarCorreo(row[4]),
+      activo: usuarioEstaActivo(row[5])
+    };
+    usuario.idKey = normalizarUserId(usuario.id);
+    usuario.nombreKey = normalizarNombre(usuario.nombre);
+    if (!usuario.id) agregarHallazgoIntegridad(informe, "critico", hoja.nombre, item.fila, "", "usuario_id_faltante", "Usuario sin identificador.");
+    if (!usuario.nombre) agregarHallazgoIntegridad(informe, "critico", hoja.nombre, item.fila, usuario.id, "usuario_nombre_faltante", "Usuario sin nombre visible.");
+    if (!ROLES_USUARIO.includes(usuario.rol)) agregarHallazgoIntegridad(informe, "critico", hoja.nombre, item.fila, usuario.id, "usuario_rol_invalido", "Rol de usuario desconocido.");
+    if (!usuario.tieneCredencial) agregarHallazgoIntegridad(informe, "critico", hoja.nombre, item.fila, usuario.id, "usuario_credencial_faltante", "Credencial de acceso faltante.");
+    agruparIntegridad(indice.porId, usuario.idKey, usuario);
+    agruparIntegridad(indice.porNombre, usuario.nombreKey, usuario);
+    agruparIntegridad(indice.porCorreo, usuario.correoKey, usuario);
+    if (usuario.id) indice.ids[usuario.id] = true;
+  });
+
+  registrarGruposIntegridad(informe, indice.porId, "critico", hoja.nombre, "usuario_id_duplicado", "Identificador de usuario repetido");
+  registrarGruposIntegridad(informe, indice.porCorreo, "critico", hoja.nombre, "usuario_correo_duplicado", "Correo de acceso repetido");
+  registrarGruposIntegridad(informe, indice.porNombre, "advertencia", hoja.nombre, "usuario_nombre_repetido", "Nombre visible repetido; puede corresponder a personas diferentes");
+  return indice;
+}
+
+function verificarReservasIntegridad(informe, hoja, usuarios) {
+  const result = { porId: {}, ids: {}, validasActivas: [] };
+  if (!hoja.existe) {
+    agregarHallazgoIntegridad(informe, "critico", SHEET_RESERVAS, null, "", "hoja_faltante", "No existe la hoja Reservas.");
+    return result;
+  }
+  validarEncabezadosIntegridad(informe, hoja, ["id", "consultorio", ["userid", "usuario", "profesional"], "fecha", "franja", "duracion", "nota", ["activa", "activo"], "tipo", "estado"]);
+  const duplicados = {};
+
+  hoja.filas.forEach(item => {
+    const row = item.values;
+    const consultorioRaw = String(row[1] === null || typeof row[1] === "undefined" ? "" : row[1]).trim();
+    const franjaRaw = String(row[4] === null || typeof row[4] === "undefined" ? "" : row[4]).trim();
+    const duracionRaw = String(row[5] === null || typeof row[5] === "undefined" ? "" : row[5]).trim();
+    const reserva = {
+      fila: item.fila,
+      id: String(row[0] || "").trim(),
+      consultorio: normalizarConsultorioIndice(row[1]),
+      userId: String(row[2] || "").trim(),
+      fecha: fechaToString(row[3]),
+      franja: Number(row[4]),
+      duracion: Number(row[5]),
+      activa: rowActiva(row[7]),
+      tipo: String(row[8] || "normal").trim().toLowerCase(),
+      estado: String(row[9] || "confirmada").trim().toLowerCase()
+    };
+    let valida = true;
+    if (!reserva.id) { valida = false; agregarHallazgoIntegridad(informe, "critico", hoja.nombre, item.fila, "", "reserva_id_faltante", "Reserva sin identificador."); }
+    if (!consultorioRaw) { valida = false; agregarHallazgoIntegridad(informe, "critico", hoja.nombre, item.fila, reserva.id, "reserva_consultorio_faltante", "Reserva sin consultorio."); }
+    else if (reserva.consultorio < 0 || reserva.consultorio >= NOMBRES_CONSULTORIOS.length) { valida = false; agregarHallazgoIntegridad(informe, "critico", hoja.nombre, item.fila, reserva.id, "reserva_consultorio_invalido", "Consultorio inexistente."); }
+    if (!esFechaValida(reserva.fecha)) { valida = false; agregarHallazgoIntegridad(informe, "critico", hoja.nombre, item.fila, reserva.id, "reserva_fecha_invalida", "Fecha inválida."); }
+    if (!franjaRaw || !esFranjaValida(reserva.franja)) { valida = false; agregarHallazgoIntegridad(informe, "critico", hoja.nombre, item.fila, reserva.id, "reserva_hora_invalida", "Hora inicial faltante o inválida."); }
+    if (!duracionRaw || !esDuracionValida(reserva.duracion, reserva.franja)) { valida = false; agregarHallazgoIntegridad(informe, "critico", hoja.nombre, item.fila, reserva.id, "reserva_duracion_invalida", "La hora final es inválida o no es posterior a la inicial."); }
+    if (!reserva.userId) {
+      valida = false;
+      agregarHallazgoIntegridad(informe, "critico", hoja.nombre, item.fila, reserva.id, "reserva_profesional_faltante", "Reserva sin identificador de profesional.");
+    } else {
+      const matches = usuarios.porId[normalizarUserId(reserva.userId)] || [];
+      if (!matches.length) { valida = false; agregarHallazgoIntegridad(informe, "critico", hoja.nombre, item.fila, reserva.id, "reserva_profesional_inexistente", `Profesional inexistente: ${reserva.userId}.`); }
+      else if (matches.length > 1) { valida = false; agregarHallazgoIntegridad(informe, "critico", hoja.nombre, item.fila, reserva.id, "reserva_profesional_ambiguo", `El identificador ${reserva.userId} corresponde a varios usuarios.`); }
+      else if (matches[0].rol !== "profesional") { valida = false; agregarHallazgoIntegridad(informe, "critico", hoja.nombre, item.fila, reserva.id, "reserva_rol_invalido", `El usuario ${reserva.userId} no tiene rol profesional.`); }
+      else if (matches[0].id !== reserva.userId) agregarHallazgoIntegridad(informe, "advertencia", hoja.nombre, item.fila, reserva.id, "reserva_id_no_canonico", `El ID ${reserva.userId} difiere en mayúsculas/minúsculas del usuario registrado.`);
+    }
+    if (!["confirmada", "cancelada"].includes(reserva.estado)) { valida = false; agregarHallazgoIntegridad(informe, "critico", hoja.nombre, item.fila, reserva.id, "reserva_estado_invalido", "Estado de reserva desconocido."); }
+    if (!["normal", "preestablecida"].includes(reserva.tipo)) agregarHallazgoIntegridad(informe, "advertencia", hoja.nombre, item.fila, reserva.id, "reserva_tipo_desconocido", "Tipo de reserva desconocido.");
+    if (esFechaValida(reserva.fecha) && esFranjaValida(reserva.franja) && esDuracionValida(reserva.duracion, reserva.franja)) {
+      const dia = parseFechaLocal(reserva.fecha).getDay();
+      if (dia === 0 || (dia === 6 && reserva.franja * 30 + reserva.duracion > 240)) agregarHallazgoIntegridad(informe, "advertencia", hoja.nombre, item.fila, reserva.id, "reserva_fuera_horario", "Reserva fuera del horario visible habitual de la agenda.");
+    }
+    agruparIntegridad(result.porId, reserva.id, reserva);
+    if (reserva.id) result.ids[reserva.id] = true;
+    if (valida && reserva.activa && reserva.estado !== "cancelada") {
+      result.validasActivas.push(reserva);
+      agruparIntegridad(duplicados, [reserva.userId, reserva.consultorio, reserva.fecha, reserva.franja, reserva.duracion].join("|"), reserva);
+    }
+  });
+
+  registrarGruposIntegridad(informe, result.porId, "critico", hoja.nombre, "reserva_id_duplicado", "Identificador de reserva repetido");
+  registrarGruposIntegridad(informe, duplicados, "advertencia", hoja.nombre, "reserva_posible_duplicado", "Posible reserva duplicada con profesional, consultorio y horario iguales");
+  verificarSolapamientosReservasIntegridad(informe, result.validasActivas);
+  return result;
+}
+
+function verificarSolapamientosReservasIntegridad(informe, reservas) {
+  const grupos = {};
+  reservas.forEach(reserva => agruparIntegridad(grupos, `${reserva.consultorio}|${reserva.fecha}`, reserva));
+  Object.keys(grupos).forEach(key => {
+    const items = grupos[key].sort((a, b) => a.franja - b.franja);
+    for (let i = 0; i < items.length; i++) {
+      const finA = items[i].franja * 30 + items[i].duracion;
+      for (let j = i + 1; j < items.length && items[j].franja * 30 < finA; j++) {
+        const misma = items[i].userId === items[j].userId && items[i].franja === items[j].franja && items[i].duracion === items[j].duracion;
+        if (!misma) agregarHallazgoIntegridad(informe, "advertencia", SHEET_RESERVAS, items[i].fila, items[i].id, "reserva_solapada", `Se solapa con la reserva ${items[j].id || "sin ID"} de la fila ${items[j].fila} en el mismo consultorio.`);
+      }
+    }
+  });
+}
+
+function verificarBloqueosIntegridad(informe, hoja) {
+  const result = { porId: {}, ids: {}, validosActivos: [] };
+  if (!hoja.existe) {
+    agregarHallazgoIntegridad(informe, "advertencia", SHEET_BLOQUEOS, null, "", "hoja_faltante", "No existe la hoja Bloqueos.");
+    return result;
+  }
+  validarEncabezadosIntegridad(informe, hoja, ["id", "consultorio", "franja", "fecha", "duracion", "nota", ["activo", "activa"], "repeticion"]);
+  const duplicados = {};
+  hoja.filas.forEach(item => {
+    const row = item.values;
+    const consultorioRaw = String(row[1] === null || typeof row[1] === "undefined" ? "" : row[1]).trim();
+    const franjaRaw = String(row[2] === null || typeof row[2] === "undefined" ? "" : row[2]).trim();
+    const duracionRaw = String(row[4] === null || typeof row[4] === "undefined" ? "" : row[4]).trim();
+    const bloqueo = {
+      fila: item.fila,
+      id: String(row[0] || "").trim(),
+      consultorio: consultorioRaw.toLowerCase() === "todos" ? "todos" : normalizarConsultorioIndice(row[1]),
+      fecha: fechaToString(row[3]),
+      franja: Number(row[2]),
+      duracion: Number(row[4]),
+      activo: rowActiva(row[6]),
+      repeticion: String(row[7] || "ninguna").trim().toLowerCase()
+    };
+    let valido = true;
+    if (!bloqueo.id) { valido = false; agregarHallazgoIntegridad(informe, "critico", hoja.nombre, item.fila, "", "bloqueo_id_faltante", "Bloqueo sin identificador."); }
+    if (!consultorioRaw) { valido = false; agregarHallazgoIntegridad(informe, "critico", hoja.nombre, item.fila, bloqueo.id, "bloqueo_consultorio_faltante", "Bloqueo sin consultorio."); }
+    else if (bloqueo.consultorio !== "todos" && (bloqueo.consultorio < 0 || bloqueo.consultorio >= NOMBRES_CONSULTORIOS.length)) { valido = false; agregarHallazgoIntegridad(informe, "critico", hoja.nombre, item.fila, bloqueo.id, "bloqueo_consultorio_invalido", "Consultorio de bloqueo inexistente."); }
+    if (!esFechaValida(bloqueo.fecha)) { valido = false; agregarHallazgoIntegridad(informe, "critico", hoja.nombre, item.fila, bloqueo.id, "bloqueo_fecha_invalida", "Fecha de bloqueo inválida."); }
+    if (!franjaRaw || !esFranjaValida(bloqueo.franja)) { valido = false; agregarHallazgoIntegridad(informe, "critico", hoja.nombre, item.fila, bloqueo.id, "bloqueo_hora_invalida", "Hora inicial de bloqueo faltante o inválida."); }
+    if (!duracionRaw || !esDuracionValida(bloqueo.duracion, bloqueo.franja)) { valido = false; agregarHallazgoIntegridad(informe, "critico", hoja.nombre, item.fila, bloqueo.id, "bloqueo_duracion_invalida", "La hora final del bloqueo es inválida o no es posterior a la inicial."); }
+    if (!["ninguna", "semanal"].includes(bloqueo.repeticion)) { valido = false; agregarHallazgoIntegridad(informe, "critico", hoja.nombre, item.fila, bloqueo.id, "bloqueo_repeticion_invalida", "Repetición de bloqueo desconocida."); }
+    agruparIntegridad(result.porId, bloqueo.id, bloqueo);
+    if (bloqueo.id) result.ids[bloqueo.id] = true;
+    if (valido && bloqueo.activo) {
+      result.validosActivos.push(bloqueo);
+      agruparIntegridad(duplicados, [bloqueo.consultorio, bloqueo.fecha, bloqueo.franja, bloqueo.duracion, bloqueo.repeticion].join("|"), bloqueo);
+    }
+  });
+  registrarGruposIntegridad(informe, result.porId, "critico", hoja.nombre, "bloqueo_id_duplicado", "Identificador de bloqueo repetido");
+  registrarGruposIntegridad(informe, duplicados, "advertencia", hoja.nombre, "bloqueo_duplicado", "Posible bloqueo duplicado");
+  verificarSolapamientosBloqueosIntegridad(informe, result.validosActivos);
+  return result;
+}
+
+function bloqueosCoincidenEnFechaIntegridad(a, b) {
+  if (a.repeticion === "ninguna" && b.repeticion === "ninguna") return a.fecha === b.fecha;
+  const diaA = parseFechaLocal(a.fecha).getDay();
+  const diaB = parseFechaLocal(b.fecha).getDay();
+  if (a.repeticion === "semanal" && b.repeticion === "semanal") return diaA === diaB;
+  return diaA === diaB;
+}
+
+function verificarSolapamientosBloqueosIntegridad(informe, bloqueos) {
+  for (let i = 0; i < bloqueos.length; i++) {
+    for (let j = i + 1; j < bloqueos.length; j++) {
+      const a = bloqueos[i], b = bloqueos[j];
+      const mismoConsultorio = a.consultorio === "todos" || b.consultorio === "todos" || a.consultorio === b.consultorio;
+      const solapaHora = a.franja * 30 < b.franja * 30 + b.duracion && a.franja * 30 + a.duracion > b.franja * 30;
+      const exacto = a.consultorio === b.consultorio && a.fecha === b.fecha && a.franja === b.franja && a.duracion === b.duracion && a.repeticion === b.repeticion;
+      if (mismoConsultorio && solapaHora && bloqueosCoincidenEnFechaIntegridad(a, b) && !exacto) {
+        agregarHallazgoIntegridad(informe, "advertencia", SHEET_BLOQUEOS, a.fila, a.id, "bloqueo_solapado", `Se solapa con el bloqueo ${b.id || "sin ID"} de la fila ${b.fila}.`);
+      }
+    }
+  }
+}
+
+function verificarAuditoriaIntegridad(informe, hoja, usuarios, reservas, bloqueos) {
+  const result = { porOperacion: {} };
+  if (!hoja.existe) {
+    agregarHallazgoIntegridad(informe, "advertencia", SHEET_AUDITORIA, null, "", "hoja_faltante", "No existe la hoja Auditoria.");
+    return result;
+  }
+  validarEncabezadosIntegridad(informe, hoja, ["timestamp", ["userid", "usuario"], "nombre", "rol", "accion", "tipo", ["elementoid", "id"], "resumen", "antes", "despues", "operationid"], 10);
+  const acciones = ["crear", "editar", "mover", "cancelar", "reconfirmar", "eliminar", "respaldo", "activar", "desactivar"];
+  const tipos = ["reserva", "bloqueo", "usuario", "sistema"];
+  const duplicadosSinOperacion = {};
+  const recienteDesde = Date.now() - INTEGRITY_RECENT_AUDIT_DAYS * 24 * 60 * 60 * 1000;
+
+  hoja.filas.forEach(item => {
+    const row = item.values;
+    const timestampMs = fechaMsIntegridad(row[0]);
+    const userId = String(row[1] || "").trim();
+    const rol = String(row[3] || "").trim().toLowerCase();
+    const accion = String(row[4] || "").trim().toLowerCase();
+    const tipo = String(row[5] || "").trim().toLowerCase();
+    const elementoId = String(row[6] || "").trim();
+    const operationId = String(row[10] || "").trim();
+    const reciente = Number.isFinite(timestampMs) && timestampMs >= recienteDesde;
+    const severidadHistorica = reciente ? "critico" : "informativo";
+    if (!Number.isFinite(timestampMs)) agregarHallazgoIntegridad(informe, severidadHistorica, hoja.nombre, item.fila, elementoId, "auditoria_timestamp_invalido", "Evento con fecha y hora inválidas.");
+    if (!acciones.includes(accion)) agregarHallazgoIntegridad(informe, severidadHistorica, hoja.nombre, item.fila, elementoId, "auditoria_accion_invalida", "Evento con acción desconocida.");
+    if (!tipos.includes(tipo)) agregarHallazgoIntegridad(informe, severidadHistorica, hoja.nombre, item.fila, elementoId, "auditoria_tipo_invalido", "Evento con tipo desconocido.");
+    if (!elementoId) agregarHallazgoIntegridad(informe, severidadHistorica, hoja.nombre, item.fila, "", "auditoria_elemento_faltante", "Evento sin identificador de elemento.");
+    if (rol && !ROLES_USUARIO.includes(rol)) agregarHallazgoIntegridad(informe, reciente ? "advertencia" : "informativo", hoja.nombre, item.fila, elementoId, "auditoria_rol_invalido", "Evento con rol desconocido.");
+    if (reciente && userId && !(usuarios.porId[normalizarUserId(userId)] || []).length) agregarHallazgoIntegridad(informe, "advertencia", hoja.nombre, item.fila, elementoId, "auditoria_usuario_inexistente", `El autor ${userId} ya no existe en Usuarios.`);
+
+    if (reciente && elementoId && accion !== "eliminar") {
+      const existe = tipo === "reserva" ? !!reservas.ids[elementoId]
+        : tipo === "bloqueo" ? !!bloqueos.ids[elementoId]
+          : tipo === "usuario" ? !!(usuarios.porId[normalizarUserId(elementoId)] || []).length
+            : true;
+      if (!existe) agregarHallazgoIntegridad(informe, "advertencia", hoja.nombre, item.fila, elementoId, "auditoria_elemento_inexistente", "Evento reciente apunta a un elemento que no existe. Las eliminaciones legítimas se excluyen de esta regla.");
+    }
+    if (operationId) agruparIntegridad(result.porOperacion, operationId, { fila: item.fila, id: elementoId, accion, tipo });
+    else agruparIntegridad(duplicadosSinOperacion, [String(row[0]), userId, accion, tipo, elementoId].join("|"), { fila: item.fila, id: elementoId });
+  });
+
+  Object.keys(result.porOperacion).forEach(operationId => {
+    const items = result.porOperacion[operationId];
+    if (items.length > 1) agregarHallazgoIntegridad(informe, "critico", hoja.nombre, items[0].fila, items[0].id, "auditoria_operacion_duplicada", `La operación ${operationId} generó ${items.length} eventos. Filas: ${items.map(item => item.fila).join(", ")}.`);
+  });
+  registrarGruposIntegridad(informe, duplicadosSinOperacion, "advertencia", hoja.nombre, "auditoria_evento_duplicado", "Posible evento duplicado sin identificador de operación");
+  return result;
+}
+
+function verificarOperacionesIntegridad(informe, hoja, usuarios, reservas, bloqueos, auditoria) {
+  if (!hoja.existe) {
+    agregarHallazgoIntegridad(informe, "advertencia", SHEET_OPERACIONES, null, "", "hoja_faltante", "No existe la hoja Operaciones; los registros históricos pueden ser anteriores a la idempotencia.");
+    return;
+  }
+  validarEncabezadosIntegridad(informe, hoja, ["operationid", "creadoen", ["userid", "usuario"], "accion", "tipo", ["elementoid", "id"], "payloadhash", "estado", "actualizadoen"]);
+  const porOperacion = {};
+  const porElemento = {};
+  const acciones = ["crearReserva", "copiarReserva", "crearBloqueo", "copiarBloqueo"];
+  hoja.filas.forEach(item => {
+    const row = item.values;
+    const operationId = String(row[0] || "").trim();
+    const creadoMs = fechaMsIntegridad(row[1]);
+    const userId = String(row[2] || "").trim();
+    const accion = String(row[3] || "").trim();
+    const tipo = String(row[4] || "").trim().toLowerCase();
+    const elementoId = String(row[5] || "").trim();
+    const payloadHash = String(row[6] || "").trim();
+    const estado = String(row[7] || "").trim().toLowerCase();
+    const actualizadoMs = fechaMsIntegridad(row[8]);
+    const op = { fila: item.fila, id: elementoId, operationId, accion, tipo, estado };
+    if (!operationId || operationId.length < 16 || operationId.length > 120 || !/^[A-Za-z0-9._:-]+$/.test(operationId)) agregarHallazgoIntegridad(informe, "critico", hoja.nombre, item.fila, elementoId, "operacion_id_invalido", "Identificador de operación faltante o inválido.");
+    if (!Number.isFinite(creadoMs) || !Number.isFinite(actualizadoMs)) agregarHallazgoIntegridad(informe, "critico", hoja.nombre, item.fila, elementoId, "operacion_fecha_invalida", "Operación con fecha de creación o actualización inválida.");
+    if (!userId) agregarHallazgoIntegridad(informe, "critico", hoja.nombre, item.fila, elementoId, "operacion_usuario_faltante", "Operación sin usuario.");
+    else if (!(usuarios.porId[normalizarUserId(userId)] || []).length) agregarHallazgoIntegridad(informe, "advertencia", hoja.nombre, item.fila, elementoId, "operacion_usuario_inexistente", `El usuario ${userId} no existe actualmente.`);
+    if (!acciones.includes(accion)) agregarHallazgoIntegridad(informe, "critico", hoja.nombre, item.fila, elementoId, "operacion_accion_invalida", "Acción idempotente desconocida.");
+    if (!["reserva", "bloqueo"].includes(tipo)) agregarHallazgoIntegridad(informe, "critico", hoja.nombre, item.fila, elementoId, "operacion_tipo_invalido", "Tipo de operación desconocido.");
+    if ((accion.endsWith("Reserva") && tipo !== "reserva") || (accion.endsWith("Bloqueo") && tipo !== "bloqueo")) agregarHallazgoIntegridad(informe, "critico", hoja.nombre, item.fila, elementoId, "operacion_tipo_inconsistente", "La acción y el tipo de la operación no coinciden.");
+    if (!elementoId) agregarHallazgoIntegridad(informe, "critico", hoja.nombre, item.fila, "", "operacion_elemento_faltante", "Operación sin identificador del elemento creado.");
+    if (!/^[a-f0-9]{64}$/i.test(payloadHash)) agregarHallazgoIntegridad(informe, "critico", hoja.nombre, item.fila, elementoId, "operacion_hash_invalido", "Huella de operación faltante o inválida.");
+    if (!["pendiente", "completada"].includes(estado)) agregarHallazgoIntegridad(informe, "critico", hoja.nombre, item.fila, elementoId, "operacion_estado_invalido", "Estado de operación desconocido.");
+    if (estado === "pendiente" && Number.isFinite(creadoMs) && Date.now() - creadoMs > 10 * 60 * 1000) agregarHallazgoIntegridad(informe, "advertencia", hoja.nombre, item.fila, elementoId, "operacion_pendiente_antigua", "Operación pendiente desde hace más de 10 minutos.");
+    if (estado === "completada") {
+      const existe = tipo === "reserva" ? !!reservas.ids[elementoId] : tipo === "bloqueo" ? !!bloqueos.ids[elementoId] : false;
+      if (!existe) agregarHallazgoIntegridad(informe, "critico", hoja.nombre, item.fila, elementoId, "operacion_elemento_inexistente", "Operación completada sin el elemento correspondiente.");
+      const eventos = auditoria.porOperacion[operationId] || [];
+      if (!eventos.length) agregarHallazgoIntegridad(informe, "advertencia", hoja.nombre, item.fila, elementoId, "operacion_sin_auditoria", "Operación completada sin evento de Actividad asociado.");
+    }
+    agruparIntegridad(porOperacion, operationId, op);
+    agruparIntegridad(porElemento, elementoId, op);
+  });
+
+  Object.keys(porOperacion).forEach(operationId => {
+    const items = porOperacion[operationId];
+    if (items.length < 2) return;
+    const elementos = [...new Set(items.map(item => item.id))];
+    agregarHallazgoIntegridad(informe, "critico", hoja.nombre, items[0].fila, items[0].id, "operacion_id_duplicado", elementos.length > 1
+      ? `La operación ${operationId} está asociada a elementos diferentes. Filas: ${items.map(item => item.fila).join(", ")}.`
+      : `La operación ${operationId} está registrada más de una vez. Filas: ${items.map(item => item.fila).join(", ")}.`);
+  });
+  Object.keys(porElemento).forEach(elementoId => {
+    const items = porElemento[elementoId];
+    const operaciones = [...new Set(items.map(item => item.operationId).filter(Boolean))];
+    if (operaciones.length > 1) agregarHallazgoIntegridad(informe, "critico", hoja.nombre, items[0].fila, elementoId, "elemento_operaciones_multiples", "El mismo elemento está asociado a identificadores de operación diferentes.");
+  });
+}
+
+function verificarCrucesAgendaIntegridad(informe, reservas, bloqueos) {
+  reservas.forEach(reserva => {
+    bloqueos.forEach(bloqueo => {
+      const mismoConsultorio = bloqueo.consultorio === "todos" || bloqueo.consultorio === reserva.consultorio;
+      if (!mismoConsultorio) return;
+      const mismaFecha = bloqueo.fecha === reserva.fecha;
+      const mismoDiaSemanal = bloqueo.repeticion === "semanal" && parseFechaLocal(bloqueo.fecha).getDay() === parseFechaLocal(reserva.fecha).getDay();
+      const solapaHora = reserva.franja * 30 < bloqueo.franja * 30 + bloqueo.duracion && reserva.franja * 30 + reserva.duracion > bloqueo.franja * 30;
+      if ((mismaFecha || mismoDiaSemanal) && solapaHora) agregarHallazgoIntegridad(informe, "advertencia", SHEET_RESERVAS, reserva.fila, reserva.id, "reserva_sobre_bloqueo", `Reserva activa superpuesta con el bloqueo ${bloqueo.id || "sin ID"} de la fila ${bloqueo.fila}.`);
+    });
+  });
+}
+
+// ── Diagnóstico anterior (se conserva por compatibilidad) ────
 function diagnosticarDatos(token) {
   const user = getUserFromToken(token);
   if (user.rol !== "admin") return { ok: false, error: "Solo admin" };

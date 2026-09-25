@@ -263,6 +263,7 @@ function App(){
   const [modal,setModal]=useState(null);
   const [bloqueoModal,setBloqueoModal]=useState(null);
   const [diagnostico,setDiagnostico]=useState(null);
+  const [diagnosticoLoading,setDiagnosticoLoading]=useState(false);
   const [usuariosAdmin,setUsuariosAdmin]=useState(null);
   const [usuariosLoading,setUsuariosLoading]=useState(false);
   const [usuarioModal,setUsuarioModal]=useState(null);
@@ -951,14 +952,16 @@ function App(){
   };
 
   const handleDiagnostico=async()=>{
-    setLoading(true);
+    if(diagnosticoLoading)return;
+    setDiagnosticoLoading(true);
     setError(null);
+    setDiagnostico(null);
     try{
-      const d=await api({action:"diagnosticarDatos",token});
-      if(d.ok){setDiagnostico(d);showToast("Diagnóstico listo");}
-      else setError(d.error||"No se pudo diagnosticar.");
-    }catch{setError("Error al diagnosticar datos.");}
-    setLoading(false);
+      const d=await api({action:"verificarIntegridad",token},{timeoutMs:60000});
+      if(d.ok){setDiagnostico(d);showToast("Verificación terminada");}
+      else setError(d.error||"No se pudo verificar la integridad de los datos.");
+    }catch(err){setError(requestErrorMessage(err,"verificar la integridad de los datos"));}
+    setDiagnosticoLoading(false);
   };
 
   const aplicarUsuariosActivos=usuarios=>{
@@ -1044,6 +1047,52 @@ function App(){
     const a=document.createElement("a");
     a.href=url;
     a.download=`reporte_reservas_${reporte.desde}_${reporte.hasta}.csv`;
+    a.click();
+    URL.revokeObjectURL(url);
+  };
+
+  const textoInformeIntegridad=()=>{
+    if(!diagnostico)return "";
+    const r=diagnostico.resumen||{};
+    const revisados=diagnostico.revisados||{};
+    return [
+      "Verificación de integridad - Psiquilibrium",
+      `Generada: ${diagnostico.generadoEn||""}`,
+      `Registros revisados: ${diagnostico.totalRegistros||0}`,
+      `Críticos: ${r.critico||0} | Advertencias: ${r.advertencia||0} | Informativos: ${r.informativo||0}`,
+      "",
+      "Registros por hoja:",
+      ...Object.entries(revisados).map(([hoja,total])=>`${hoja}: ${total}`),
+      "",
+      "Hallazgos:",
+      ...((diagnostico.hallazgos||[]).length
+        ?diagnostico.hallazgos.map(h=>`[${String(h.severidad||"").toUpperCase()}] ${h.hoja}${h.fila?` fila ${h.fila}`:""}${h.id?` · ID ${h.id}`:""}: ${h.mensaje}`)
+        :["No se encontraron problemas."]),
+      diagnostico.hallazgosOmitidos?`\nSe omitieron ${diagnostico.hallazgosOmitidos} hallazgos del detalle por seguridad de tamaño.`:""
+    ].join("\n");
+  };
+
+  const copiarInformeIntegridad=async()=>{
+    const texto=textoInformeIntegridad();
+    if(!texto)return;
+    try{
+      if(navigator.clipboard?.writeText)await navigator.clipboard.writeText(texto);
+      else{
+        const area=document.createElement("textarea");
+        area.value=texto;area.style.position="fixed";area.style.opacity="0";
+        document.body.appendChild(area);area.select();document.execCommand("copy");area.remove();
+      }
+      showToast("Informe copiado");
+    }catch{setError("No se pudo copiar el informe. Puedes descargarlo en su lugar.");}
+  };
+
+  const descargarInformeIntegridad=()=>{
+    const texto=textoInformeIntegridad();
+    if(!texto)return;
+    const url=URL.createObjectURL(new Blob([texto],{type:"text/plain;charset=utf-8"}));
+    const a=document.createElement("a");
+    a.href=url;
+    a.download=`integridad_${String(diagnostico.generadoEn||"").slice(0,10)||"datos"}.txt`;
     a.click();
     URL.revokeObjectURL(url);
   };
@@ -1323,12 +1372,8 @@ function App(){
   const accionColor={crear:"var(--success)",editar:"var(--navy)",activar:"var(--success)",desactivar:"var(--danger)",mover:"#9B3FA0",cancelar:"var(--danger)",reconfirmar:"var(--success)",eliminar:"var(--muted)",respaldo:"var(--blocked-border)"};
   const tipoTexto={reserva:"Reserva",bloqueo:"Bloqueo",usuario:"Usuario",sistema:"Sistema"};
   const viewLabels={"consolidada":"Agenda","semana":"Semana","mis reservas":"Mis reservas",todas:"Todas",reportes:"Reportes",actividad:"Actividad"};
-  const renderEjemplos=items=>(items||[]).slice(0,3).map((x,i)=>{
-    const filas=x.items?x.items.map(it=>it.fila).join(", "):x.fila;
-    const detalle=x.items?`${x.tipo} (${x.cantidad})`:x.problemas.join(", ");
-    return <div key={i} style={{fontSize:11,color:"var(--muted)",marginTop:3}}>Filas {filas}: {detalle}</div>;
-  });
-  const countDiag=v=>Number.isFinite(Number(v))?Number(v):0;
+  const severidadTexto={critico:"Crítico",advertencia:"Advertencia",informativo:"Informativo"};
+  const severidadColor={critico:"var(--danger)",advertencia:"#8a6500",informativo:"var(--navy)"};
 
   return(
     <div style={{paddingBottom:"2rem"}}>
@@ -1544,7 +1589,7 @@ function App(){
             {(canCreateBackup||isAdmin)&&<div className="toolbar-actions">
               {canCreateBackup&&<button onClick={handleCrearRespaldo} disabled={loading} style={{fontSize:12,background:"#fff",color:"var(--navy)",border:"1px solid var(--border)"}}>Crear respaldo</button>}
               {isAdmin&&<button onClick={()=>usuariosAdmin===null?fetchUsuariosAdmin():setUsuariosAdmin(null)} disabled={usuariosLoading} style={{fontSize:12,background:"#fff",color:"var(--navy)",border:"1px solid var(--border)"}}>{usuariosLoading?"Cargando...":usuariosAdmin===null?"Usuarios":"Cerrar usuarios"}</button>}
-              {isAdmin&&<button onClick={handleDiagnostico} disabled={loading} style={{fontSize:12,background:"#fff",color:"var(--navy)",border:"1px solid var(--border)"}}>Diagnosticar datos</button>}
+              {isAdmin&&<button onClick={handleDiagnostico} disabled={diagnosticoLoading} style={{fontSize:12,background:"#fff",color:"var(--navy)",border:"1px solid var(--border)"}}>{diagnosticoLoading?"Verificando...":"Verificar integridad"}</button>}
               {isAdmin&&<button onClick={async()=>{setLoading(true);try{const d=await api({action:"generarPreestablecidas",token});if(d.ok){await fetchAll(token);showToast(`${d.creadas} reservas fijas generadas`);}else setError(d.error);}catch{setError("Error.");}setLoading(false);}} style={{fontSize:12,background:"var(--cyan-light)",color:"var(--navy)"}}>⚡ Generar reservas fijas</button>}
             </div>}
           </div>
@@ -1609,37 +1654,37 @@ function App(){
           {diagnostico&&(
             <div style={{...s.card,marginBottom:12,borderLeft:"3px solid var(--cyan)"}}>
               <div style={{display:"flex",justifyContent:"space-between",gap:8,flexWrap:"wrap",marginBottom:8}}>
-                <div style={{fontWeight:600,fontSize:13,color:"var(--navy)"}}>Diagnóstico de datos</div>
-                <div style={s.muted}>{diagnostico.generadoEn}</div>
+                <div>
+                  <div style={{fontWeight:700,fontSize:14,color:"var(--navy)"}}>Verificación de integridad</div>
+                  <div style={s.muted}>{diagnostico.generadoEn} · {diagnostico.totalRegistros||0} registros revisados · {diagnostico.duracionMs||0} ms</div>
+                </div>
+                <div className="toolbar-actions">
+                  <button onClick={copiarInformeIntegridad} style={{fontSize:12}}>Copiar informe</button>
+                  <button onClick={descargarInformeIntegridad} style={{fontSize:12}}>Descargar</button>
+                  <button onClick={()=>setDiagnostico(null)} style={{fontSize:12}}>Cerrar</button>
+                </div>
               </div>
-              <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(150px,1fr))",gap:8}}>
-                <div style={s.muted}>Usuarios registrados: <strong>{countDiag(diagnostico.resumen.usuariosRegistrados)}</strong></div>
-                <div style={s.muted}>IDs de usuario repetidos: <strong>{countDiag(diagnostico.resumen.usuariosDuplicados)}</strong></div>
-                <div style={s.muted}>Usuarios inválidos: <strong>{countDiag(diagnostico.resumen.usuariosInvalidos)}</strong></div>
-                <div style={s.muted}>Nombres repetidos: <strong>{countDiag(diagnostico.resumen.nombresRepetidos)}</strong></div>
-                <div style={s.muted}>Nombres similares: <strong>{countDiag(diagnostico.resumen.nombresSimilares)}</strong></div>
-                <div style={s.muted}>Correos repetidos: <strong>{countDiag(diagnostico.resumen.correosDuplicados)}</strong></div>
-                <div style={s.muted}>Reservas activas: <strong>{countDiag(diagnostico.resumen.reservasActivas)}</strong></div>
-                <div style={s.muted}>Reservas duplicadas: <strong>{countDiag(diagnostico.resumen.reservasDuplicadas)}</strong></div>
-                <div style={s.muted}>Reservas inválidas: <strong>{countDiag(diagnostico.resumen.reservasInvalidas)}</strong></div>
-                <div style={s.muted}>Reservas con identidad por revisar: <strong>{countDiag(diagnostico.resumen.reservasIdentidadAmbigua)}</strong></div>
-                <div style={s.muted}>Bloqueos activos: <strong>{countDiag(diagnostico.resumen.bloqueosActivos)}</strong></div>
-                <div style={s.muted}>Bloqueos duplicados: <strong>{countDiag(diagnostico.resumen.bloqueosDuplicados)}</strong></div>
-                <div style={s.muted}>Bloqueos inválidos: <strong>{countDiag(diagnostico.resumen.bloqueosInvalidos)}</strong></div>
+              <div className="metric-grid" style={{marginBottom:8}}>
+                <div className="metric-card"><div style={s.muted}>Críticos</div><div className="metric-value" style={{color:"var(--danger)"}}>{diagnostico.resumen?.critico||0}</div></div>
+                <div className="metric-card"><div style={s.muted}>Advertencias</div><div className="metric-value" style={{color:"#8a6500"}}>{diagnostico.resumen?.advertencia||0}</div></div>
+                <div className="metric-card"><div style={s.muted}>Informativos</div><div className="metric-value" style={{color:"var(--navy)"}}>{diagnostico.resumen?.informativo||0}</div></div>
               </div>
-              <div style={{marginTop:8}}>
-                {renderEjemplos(diagnostico.usuarios?.duplicados)}
-                {renderEjemplos(diagnostico.usuarios?.invalidos)}
-                {renderEjemplos(diagnostico.usuarios?.nombresRepetidos)}
-                {renderEjemplos(diagnostico.usuarios?.nombresSimilares)}
-                {renderEjemplos(diagnostico.usuarios?.correosDuplicados)}
-                {renderEjemplos(diagnostico.reservas.duplicados)}
-                {renderEjemplos(diagnostico.reservas.invalidos)}
-                {renderEjemplos(diagnostico.identidadReservas?.problemas)}
-                {renderEjemplos(diagnostico.bloqueos.duplicados)}
-                {renderEjemplos(diagnostico.bloqueos.invalidos)}
-                {countDiag(diagnostico.resumen.usuariosDuplicados)+countDiag(diagnostico.resumen.usuariosInvalidos)+countDiag(diagnostico.resumen.nombresRepetidos)+countDiag(diagnostico.resumen.nombresSimilares)+countDiag(diagnostico.resumen.correosDuplicados)+countDiag(diagnostico.resumen.reservasIdentidadAmbigua)+countDiag(diagnostico.resumen.reservasDuplicadas)+countDiag(diagnostico.resumen.reservasInvalidas)+countDiag(diagnostico.resumen.bloqueosDuplicados)+countDiag(diagnostico.resumen.bloqueosInvalidos)===0&&<div style={s.muted}>No se encontraron identidades ambiguas, duplicados ni datos inválidos.</div>}
+              <div style={{fontSize:11,color:"var(--muted)",marginBottom:8,overflowWrap:"anywhere"}}>
+                {Object.entries(diagnostico.revisados||{}).map(([hoja,total])=><span key={hoja} style={{display:"inline-block",marginRight:12}}>{hoja}: <strong>{total}</strong></span>)}
               </div>
+              {(diagnostico.hallazgos||[]).length===0
+                ?<div className="notice notice-info" style={{marginBottom:0}}>No se encontraron problemas.</div>
+                :<div style={{display:"grid",gap:6}}>
+                  {(diagnostico.hallazgos||[]).map((h,i)=><div key={`${h.regla}-${h.hoja}-${h.fila}-${i}`} style={{border:"1px solid var(--border)",borderLeft:`4px solid ${severidadColor[h.severidad]||"var(--border)"}`,borderRadius:8,padding:"8px 10px",background:"#fff",minWidth:0}}>
+                    <div style={{display:"flex",gap:7,alignItems:"center",flexWrap:"wrap"}}>
+                      <span className="status-chip" style={{background:h.severidad==="critico"?"var(--danger-bg)":h.severidad==="advertencia"?"var(--blocked)":"var(--cyan-light)",color:severidadColor[h.severidad]}}>{severidadTexto[h.severidad]||h.severidad}</span>
+                      <strong style={{fontSize:12}}>{h.hoja}{h.fila?` · fila ${h.fila}`:""}</strong>
+                      {h.id&&<span style={s.muted}>ID {h.id}</span>}
+                    </div>
+                    <div style={{fontSize:12,lineHeight:1.4,marginTop:5,overflowWrap:"anywhere"}}>{h.mensaje}</div>
+                  </div>)}
+                  {diagnostico.hallazgosOmitidos>0&&<div className="notice notice-info" style={{marginBottom:0}}>Se omitieron {diagnostico.hallazgosOmitidos} hallazgos del detalle. Los conteos superiores sí incluyen el total.</div>}
+                </div>}
             </div>
           )}
           {reservasFiltradas.length===0&&<div style={{...s.card,padding:"0.8rem",marginBottom:10,borderLeft:"3px solid var(--cyan)"}}>
